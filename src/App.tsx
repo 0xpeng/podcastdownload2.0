@@ -222,14 +222,41 @@ function App() {
   const uploadForTranscription = async (audioBlob: Blob, episode: Episode) => {
     console.log(`準備上傳音檔進行轉錄，檔案大小: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
     
+    // 更新進度：開始上傳
+    setTranscriptProgress(prev => {
+      const newMap = new Map(prev);
+      newMap.set(episode.id, 40);
+      return newMap;
+    });
+    
     const formData = new FormData();
     formData.append('audio', audioBlob, `${episode.title}.mp3`);
     formData.append('title', episode.title);
     formData.append('episodeId', episode.id);
 
+    console.log('開始上傳音檔到轉錄服務...');
+    
+    // 更新進度：上傳中
+    setTranscriptProgress(prev => {
+      const newMap = new Map(prev);
+      newMap.set(episode.id, 50);
+      return newMap;
+    });
+
+    const uploadStartTime = Date.now();
     const response = await fetch('/api/transcribe', {
       method: 'POST',
       body: formData,
+    });
+
+    const uploadTime = Date.now() - uploadStartTime;
+    console.log(`音檔上傳完成，耗時: ${uploadTime}ms`);
+
+    // 更新進度：確認開始轉錄
+    setTranscriptProgress(prev => {
+      const newMap = new Map(prev);
+      newMap.set(episode.id, 60);
+      return newMap;
     });
 
     if (!response.ok) {
@@ -238,8 +265,25 @@ function App() {
       throw new Error(`轉錄服務錯誤 (${response.status}): ${response.statusText}\n${errorText}`);
     }
 
+    console.log('✅ 轉錄服務已確認開始處理，正在等待結果...');
+    
+    // 更新進度：轉錄進行中
+    setTranscriptProgress(prev => {
+      const newMap = new Map(prev);
+      newMap.set(episode.id, 70);
+      return newMap;
+    });
+
     const result = await response.json();
-    console.log('轉錄結果:', result);
+    console.log('轉錄結果接收完成:', result);
+    
+    // 更新進度：處理結果
+    setTranscriptProgress(prev => {
+      const newMap = new Map(prev);
+      newMap.set(episode.id, 90);
+      return newMap;
+    });
+    
     return result;
   };
 
@@ -702,6 +746,18 @@ function App() {
     const isTranscribing = transcribing.has(episode.id);
     const progress = transcriptProgress.get(episode.id) || 0;
 
+    // 根據進度顯示不同的狀態文字
+    const getProgressText = (progress: number) => {
+      if (progress <= 10) return '準備中...';
+      if (progress <= 30) return '下載音檔...';
+      if (progress <= 40) return '準備上傳...';
+      if (progress <= 50) return '上傳音檔...';
+      if (progress <= 60) return '開始轉錄...';
+      if (progress <= 70) return '✅ 轉錄進行中...';
+      if (progress <= 90) return '處理結果...';
+      return '即將完成...';
+    };
+
     switch (episode.transcriptStatus) {
       case 'processing':
         return (
@@ -714,7 +770,7 @@ function App() {
               ></div>
             </div>
             <span className="transcript-status processing">
-              {progress}%
+              {getProgressText(progress)} ({progress}%)
             </span>
           </div>
         );
