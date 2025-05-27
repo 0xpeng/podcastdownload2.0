@@ -58,8 +58,8 @@ function App() {
       return;
     }
 
-    setTranscribing(prev => new Set([...prev, episode.id]));
-    setTranscriptProgress(prev => new Map([...prev, [episode.id, 0]]));
+    setTranscribing(prev => { const newSet = new Set(prev); newSet.add(episode.id); return newSet; });
+    setTranscriptProgress(prev => { const newMap = new Map(prev); newMap.set(episode.id, 0); return newMap; });
     
     // 更新集數狀態
     setEpisodes(prev => prev.map(ep => 
@@ -70,15 +70,15 @@ function App() {
 
     try {
       // 1. 下載音檔
-      setTranscriptProgress(prev => new Map([...prev, [episode.id, 20]]));
+      setTranscriptProgress(prev => { const newMap = new Map(prev); newMap.set(episode.id, 20); return newMap; });
       const audioBlob = await downloadAudioForTranscription(episode.audioUrl);
       
       // 2. 上傳到後端進行轉錄
-      setTranscriptProgress(prev => new Map([...prev, [episode.id, 50]]));
+      setTranscriptProgress(prev => { const newMap = new Map(prev); newMap.set(episode.id, 50); return newMap; });
       const transcript = await uploadForTranscription(audioBlob, episode);
       
       // 3. 更新狀態
-      setTranscriptProgress(prev => new Map([...prev, [episode.id, 100]]));
+      setTranscriptProgress(prev => { const newMap = new Map(prev); newMap.set(episode.id, 100); return newMap; });
       setEpisodes(prev => prev.map(ep => 
         ep.id === episode.id 
           ? { 
