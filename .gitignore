@@ -1,0 +1,7 @@
+node_modules
+podcast-downloader/
+podcast-downloader-app/
+.DS_Store
+*.log
+build/
+dist/
