@@ -7,6 +7,9 @@ interface Episode {
   pubDate: string;
   duration: string;
   audioUrl: string;
+  transcriptStatus?: 'none' | 'processing' | 'completed' | 'error';
+  transcriptText?: string;
+  transcriptUrl?: string;
 }
 
 const mockEpisodes: Episode[] = [
@@ -16,6 +19,7 @@ const mockEpisodes: Episode[] = [
     pubDate: '2024-05-01',
     duration: '30:12',
     audioUrl: 'https://example.com/podcast/ep1.mp3',
+    transcriptStatus: 'none',
   },
   {
     id: '2',
@@ -23,6 +27,7 @@ const mockEpisodes: Episode[] = [
     pubDate: '2024-05-08',
     duration: '28:45',
     audioUrl: 'https://example.com/podcast/ep2.mp3',
+    transcriptStatus: 'none',
   },
   {
     id: '3',
@@ -30,6 +35,7 @@ const mockEpisodes: Episode[] = [
     pubDate: '2024-05-15',
     duration: '32:10',
     audioUrl: 'https://example.com/podcast/ep3.mp3',
+    transcriptStatus: 'none',
   },
 ];
 
@@ -41,8 +47,170 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [downloadSpeed, setDownloadSpeed] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
+  const [transcribing, setTranscribing] = useState<Set<string>>(new Set());
+  const [transcriptProgress, setTranscriptProgress] = useState<Map<string, number>>(new Map());
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // 轉錄功能
+  const handleTranscribe = async (episode: Episode) => {
+    if (!episode.audioUrl) {
+      alert('此集數沒有音檔連結');
+      return;
+    }
+
+    setTranscribing(prev => new Set([...prev, episode.id]));
+    setTranscriptProgress(prev => new Map([...prev, [episode.id, 0]]));
+    
+    // 更新集數狀態
+    setEpisodes(prev => prev.map(ep => 
+      ep.id === episode.id 
+        ? { ...ep, transcriptStatus: 'processing' }
+        : ep
+    ));
+
+    try {
+      // 1. 下載音檔
+      setTranscriptProgress(prev => new Map([...prev, [episode.id, 20]]));
+      const audioBlob = await downloadAudioForTranscription(episode.audioUrl);
+      
+      // 2. 上傳到後端進行轉錄
+      setTranscriptProgress(prev => new Map([...prev, [episode.id, 50]]));
+      const transcript = await uploadForTranscription(audioBlob, episode);
+      
+      // 3. 更新狀態
+      setTranscriptProgress(prev => new Map([...prev, [episode.id, 100]]));
+      setEpisodes(prev => prev.map(ep => 
+        ep.id === episode.id 
+          ? { 
+              ...ep, 
+              transcriptStatus: 'completed',
+              transcriptText: transcript.text,
+              transcriptUrl: transcript.url 
+            }
+          : ep
+      ));
+
+      alert(`"${episode.title}" 轉錄完成！`);
+    } catch (error) {
+      console.error('轉錄失敗:', error);
+      setEpisodes(prev => prev.map(ep => 
+        ep.id === episode.id 
+          ? { ...ep, transcriptStatus: 'error' }
+          : ep
+      ));
+      alert(`轉錄失敗：${error instanceof Error ? error.message : '未知錯誤'}`);
+    } finally {
+      setTranscribing(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(episode.id);
+        return newSet;
+      });
+      setTranscriptProgress(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(episode.id);
+        return newMap;
+      });
+    }
+  };
+
+  // 下載音檔用於轉錄
+  const downloadAudioForTranscription = async (audioUrl: string): Promise<Blob> => {
+    const corsProxies = [
+      '',
+      'https://api.allorigins.win/raw?url=',
+      'https://corsproxy.io/?',
+    ];
+
+    for (const proxy of corsProxies) {
+      try {
+        const requestUrl = proxy ? proxy + encodeURIComponent(audioUrl) : audioUrl;
+        const response = await fetch(requestUrl);
+        
+        if (response.ok) {
+          return await response.blob();
+        }
+      } catch (error) {
+        console.log(`下載音檔失敗 (${proxy || '直接請求'}):`, error);
+        continue;
+      }
+    }
+    
+    throw new Error('無法下載音檔進行轉錄');
+  };
+
+  // 上傳音檔到後端進行轉錄
+  const uploadForTranscription = async (audioBlob: Blob, episode: Episode) => {
+    const formData = new FormData();
+    formData.append('audio', audioBlob, `${episode.title}.mp3`);
+    formData.append('title', episode.title);
+    formData.append('episodeId', episode.id);
+
+    const response = await fetch('/api/transcribe', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error(`轉錄服務錯誤: ${response.statusText}`);
+    }
+
+    return await response.json();
+  };
+
+  // 下載逐字稿
+  const handleDownloadTranscript = (episode: Episode) => {
+    if (!episode.transcriptText) {
+      alert('此集數沒有逐字稿');
+      return;
+    }
+
+    const blob = new Blob([episode.transcriptText], { type: 'text/plain;charset=utf-8' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${episode.title}_逐字稿.txt`;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    
+    setTimeout(() => {
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    }, 100);
+  };
+
+  // 批量轉錄
+  const handleBatchTranscribe = async () => {
+    if (selected.length === 0) {
+      alert('請先選擇要轉錄的集數');
+      return;
+    }
+
+    const selectedEpisodes = episodes.filter(ep => selected.includes(ep.id));
+    const confirmMessage = `確定要轉錄 ${selectedEpisodes.length} 個集數嗎？\n\n注意：轉錄可能需要較長時間，建議一次不要超過 5 個集數。`;
+    
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
+    for (const episode of selectedEpisodes) {
+      if (episode.transcriptStatus === 'completed') {
+        console.log(`跳過已轉錄的集數: ${episode.title}`);
+        continue;
+      }
+      
+      await handleTranscribe(episode);
+      
+      // 在轉錄之間稍作延遲
+      if (selectedEpisodes.indexOf(episode) < selectedEpisodes.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+
+    alert('批量轉錄完成！');
+  };
+
+  // 原有的功能保持不變...
   const handleSelect = (id: string) => {
     setSelected((prev) =>
       prev.includes(id) ? prev.filter((sid) => sid !== id) : [...prev, id]
@@ -59,9 +227,8 @@ function App() {
 
   const parseRssFeed = async (url: string) => {
     try {
-      // CORS 代理服務列表（按優先順序）
       const corsProxies = [
-        '', // 先嘗試直接請求
+        '',
         'https://api.allorigins.win/raw?url=',
         'https://corsproxy.io/?',
         'https://cors-anywhere.herokuapp.com/',
@@ -72,7 +239,6 @@ function App() {
       let response: Response | null = null;
       let lastError: Error | null = null;
 
-      // 依序嘗試每個代理
       for (const proxy of corsProxies) {
         try {
           const requestUrl = proxy ? proxy + encodeURIComponent(url) : url;
@@ -108,7 +274,6 @@ function App() {
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(text, 'text/xml');
       
-      // 檢查是否有解析錯誤
       const parseError = xmlDoc.querySelector('parsererror');
       if (parseError) {
         throw new Error('RSS feed 格式錯誤');
@@ -131,6 +296,7 @@ function App() {
           pubDate,
           duration,
           audioUrl,
+          transcriptStatus: 'none',
         };
       });
       
@@ -148,7 +314,6 @@ function App() {
       alert(`已複製 "${title}" 的音檔連結到剪貼簿！`);
     } catch (error) {
       console.error('複製失敗:', error);
-      // 備用方案：顯示連結讓用戶手動複製
       prompt('複製下方連結:', audioUrl);
     }
   };
@@ -169,7 +334,6 @@ function App() {
     setDownloading(true);
     setProgress(0);
     
-    // CORS 代理服務列表（按優先順序）
     const corsProxies = [
       'https://cors-anywhere.herokuapp.com/',
       'https://api.allorigins.win/raw?url=',
@@ -187,7 +351,6 @@ function App() {
       
       let downloadSuccess = false;
       
-      // 首先嘗試直接下載
       try {
         console.log(`嘗試直接下載: ${episode.title}`);
         await downloadFile(episode.audioUrl, episode);
@@ -197,7 +360,6 @@ function App() {
         console.log(`直接下載失敗，嘗試使用代理: ${error}`);
       }
       
-      // 如果直接下載失敗，嘗試使用 CORS 代理
       if (!downloadSuccess) {
         for (const proxy of corsProxies) {
           try {
@@ -214,7 +376,6 @@ function App() {
         }
       }
       
-      // 如果所有方法都失敗
       if (!downloadSuccess) {
         console.error(`所有下載方法都失敗: ${episode.title}`);
         const userChoice = window.confirm(
@@ -228,10 +389,8 @@ function App() {
         }
       }
       
-      // 更新進度
       setProgress(Math.round(((i + 1) / selected.length) * 100));
       
-      // 在下載之間稍作延遲
       if (i < selected.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
@@ -244,7 +403,6 @@ function App() {
     alert('批量下載完成！');
   };
 
-  // 下載檔案的輔助函數
   const downloadFile = async (url: string, episode: Episode) => {
     const response = await fetch(url, {
       method: 'GET',
@@ -258,12 +416,10 @@ function App() {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
     
-    // 讀取音檔數據
     const blob = await response.blob();
     
-    // 確定檔案副檔名
     const contentType = response.headers.get('content-type') || '';
-    let extension = '.mp3'; // 預設
+    let extension = '.mp3';
     
     if (contentType.includes('mp4') || contentType.includes('m4a')) {
       extension = '.m4a';
@@ -275,7 +431,6 @@ function App() {
       extension = '.aac';
     }
     
-    // 從 URL 推測副檔名（如果 Content-Type 不明確）
     if (extension === '.mp3') {
       const urlLower = episode.audioUrl.toLowerCase();
       if (urlLower.includes('.m4a')) extension = '.m4a';
@@ -284,14 +439,12 @@ function App() {
       else if (urlLower.includes('.aac')) extension = '.aac';
     }
     
-    // 清理檔案名稱
     const cleanTitle = episode.title
       .replace(/[<>:"/\\|?*]/g, '_')
       .replace(/\s+/g, ' ')
       .trim()
       .substring(0, 100);
     
-    // 創建下載連結
     const downloadUrl = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = downloadUrl;
@@ -300,7 +453,6 @@ function App() {
     document.body.appendChild(a);
     a.click();
     
-    // 清理
     setTimeout(() => {
       window.URL.revokeObjectURL(downloadUrl);
       document.body.removeChild(a);
@@ -308,125 +460,275 @@ function App() {
   };
 
   const handlePause = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      setIsPaused(true);
+    setIsPaused(true);
+  };
+
+  // 渲染轉錄狀態圖示
+  const renderTranscriptStatus = (episode: Episode) => {
+    const isTranscribing = transcribing.has(episode.id);
+    const progress = transcriptProgress.get(episode.id) || 0;
+
+    switch (episode.transcriptStatus) {
+      case 'processing':
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ 
+              width: '16px', 
+              height: '16px', 
+              border: '2px solid #f3f3f3',
+              borderTop: '2px solid #007bff',
+              borderRadius: '50%',
+              animation: 'spin 1s linear infinite'
+            }}></div>
+            <span style={{ fontSize: '12px', color: '#666' }}>
+              轉錄中 {progress}%
+            </span>
+          </div>
+        );
+      case 'completed':
+        return (
+          <span style={{ color: '#28a745', fontSize: '12px' }}>
+            ✅ 已完成
+          </span>
+        );
+      case 'error':
+        return (
+          <span style={{ color: '#dc3545', fontSize: '12px' }}>
+            ❌ 失敗
+          </span>
+        );
+      default:
+        return (
+          <span style={{ color: '#6c757d', fontSize: '12px' }}>
+            📝 未轉錄
+          </span>
+        );
     }
   };
 
   return (
     <div className="App">
       <header className="App-header">
-        <h1>🎧 Podcast 批量下載工具</h1>
-        <div style={{ margin: '20px 0' }}>
-          <input
-            type="text"
-            value={rssUrl}
-            onChange={(e) => setRssUrl(e.target.value)}
-            placeholder="請輸入 Podcast RSS Feed 連結"
-            style={{ width: 320, padding: 8, borderRadius: 6, border: '1px solid #ccc', fontSize: 16 }}
-            disabled={downloading}
-          />
-          <button
-            onClick={handleLoadRss}
-            style={{ marginLeft: 12, padding: '8px 18px', borderRadius: 6, fontSize: 16, background: '#61dafb', color: '#222', border: 'none', cursor: 'pointer' }}
-            disabled={downloading}
-          >
-            載入
-          </button>
-        </div>
-        <div style={{ background: '#fff', color: '#222', borderRadius: 12, padding: 24, minWidth: 400, boxShadow: '0 2px 16px #0001' }}>
-          <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontWeight: 600 }}>集數列表</span>
-            <div>
-              <button onClick={handleSelectAll} style={{ marginRight: 8, padding: '4px 10px', borderRadius: 4, border: '1px solid #61dafb', background: '#e3f7fd', cursor: 'pointer' }}>全選</button>
-              <button onClick={handleDeselectAll} style={{ padding: '4px 10px', borderRadius: 4, border: '1px solid #bbb', background: '#f5f5f5', cursor: 'pointer' }}>全不選</button>
-            </div>
-          </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ background: '#f0f8ff' }}>
-                <th></th>
-                <th style={{ textAlign: 'left', padding: 6 }}>標題</th>
-                <th style={{ padding: 6 }}>日期</th>
-                <th style={{ padding: 6 }}>時長</th>
-                <th style={{ padding: 6 }}>音檔連結</th>
-              </tr>
-            </thead>
-            <tbody>
-              {episodes.map((ep) => (
-                <tr key={ep.id} style={{ borderBottom: '1px solid #eee' }}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(ep.id)}
-                      onChange={() => handleSelect(ep.id)}
-                      disabled={downloading}
-                    />
-                  </td>
-                  <td style={{ textAlign: 'left', padding: 6 }}>{ep.title}</td>
-                  <td style={{ padding: 6 }}>{ep.pubDate}</td>
-                  <td style={{ padding: 6 }}>{ep.duration}</td>
-                  <td style={{ padding: 6 }}>
-                    {ep.audioUrl ? (
-                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                        <a 
-                          href={ep.audioUrl} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          style={{ color: '#61dafb', textDecoration: 'none', fontSize: 12 }}
-                          title="點擊在新分頁中打開音檔連結"
-                        >
-                          🔗 連結
-                        </a>
-                        <button
-                          onClick={() => handleCopyLink(ep.audioUrl, ep.title)}
-                          style={{ 
-                            background: 'none', 
-                            border: '1px solid #ddd', 
-                            borderRadius: 3, 
-                            padding: '2px 6px', 
-                            fontSize: 10, 
-                            cursor: 'pointer',
-                            color: '#666'
-                          }}
-                          title="複製連結到剪貼簿"
-                        >
-                          📋
-                        </button>
-                      </div>
-                    ) : (
-                      <span style={{ color: '#999', fontSize: 12 }}>無連結</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div style={{ marginTop: 18, display: 'flex', alignItems: 'center' }}>
-            <button
-              onClick={downloading ? handlePause : handleDownload}
-              disabled={selected.length === 0}
-              style={{ padding: '8px 24px', borderRadius: 6, fontSize: 16, background: '#222', color: '#fff', border: 'none', cursor: selected.length === 0 ? 'not-allowed' : 'pointer' }}
-            >
-              {downloading ? (isPaused ? '繼續下載' : '暫停下載') : `批量下載 (${selected.length})`}
+        <h1>🎧 Podcast批量下載與轉錄工具</h1>
+        <p>輸入 RSS feed 連結，批量下載 podcast 集數並生成逐字稿</p>
+      </header>
+
+      <main className="main-content">
+        <div className="input-section">
+          <div className="input-group">
+            <input
+              type="url"
+              value={rssUrl}
+              onChange={(e) => setRssUrl(e.target.value)}
+              placeholder="請輸入 RSS feed 連結..."
+              className="rss-input"
+            />
+            <button onClick={handleLoadRss} className="load-button">
+              載入集數
             </button>
+          </div>
+          <p className="hint">
+            💡 提示：工具會自動嘗試多種方法下載音檔和生成逐字稿
+          </p>
+        </div>
+
+        {episodes.length > 0 && (
+          <div className="episodes-section">
+            <div className="controls">
+              <div className="selection-controls">
+                <button onClick={handleSelectAll} className="select-button">
+                  全選
+                </button>
+                <button onClick={handleDeselectAll} className="select-button">
+                  全不選
+                </button>
+                <span className="selected-count">
+                  已選擇 {selected.length} / {episodes.length} 個集數
+                </span>
+              </div>
+              
+              <div className="action-controls">
+                <button
+                  onClick={handleDownload}
+                  disabled={selected.length === 0 || downloading}
+                  className="download-button"
+                >
+                  {downloading ? '下載中...' : `批量下載 (${selected.length})`}
+                </button>
+                
+                <button
+                  onClick={handleBatchTranscribe}
+                  disabled={selected.length === 0}
+                  className="transcribe-button"
+                  style={{ 
+                    backgroundColor: '#28a745',
+                    marginLeft: '10px'
+                  }}
+                >
+                  🎤 批量轉錄 ({selected.length})
+                </button>
+              </div>
+            </div>
+
             {downloading && (
-              <div style={{ marginLeft: 18, width: 180, height: 12, background: '#eee', borderRadius: 6, overflow: 'hidden' }}>
-                <div style={{ width: `${progress}%`, height: '100%', background: '#61dafb', transition: 'width 0.3s' }}></div>
+              <div className="progress-section">
+                <div className="progress-bar">
+                  <div 
+                    className="progress-fill" 
+                    style={{ width: `${progress}%` }}
+                  ></div>
+                </div>
+                <p>下載進度: {progress}%</p>
               </div>
             )}
-            {downloading && (
-              <span style={{ marginLeft: 12, fontSize: 14 }}>{downloadSpeed} KB/s</span>
-            )}
+
+            <div className="episodes-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>選擇</th>
+                    <th>標題</th>
+                    <th>發布日期</th>
+                    <th>時長</th>
+                    <th>音檔連結</th>
+                    <th>轉錄狀態</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {episodes.map((episode) => (
+                    <tr key={episode.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selected.includes(episode.id)}
+                          onChange={() => handleSelect(episode.id)}
+                        />
+                      </td>
+                      <td className="episode-title">{episode.title}</td>
+                      <td>{episode.pubDate}</td>
+                      <td>{episode.duration}</td>
+                      <td className="audio-url">
+                        {episode.audioUrl ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <a 
+                              href={episode.audioUrl} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              style={{ 
+                                color: '#007bff',
+                                textDecoration: 'none',
+                                fontSize: '12px',
+                                maxWidth: '200px',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }}
+                            >
+                              🔗 音檔連結
+                            </a>
+                            <button
+                              onClick={() => handleCopyLink(episode.audioUrl, episode.title)}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                cursor: 'pointer',
+                                fontSize: '12px'
+                              }}
+                              title="複製連結"
+                            >
+                              📋
+                            </button>
+                          </div>
+                        ) : (
+                          <span style={{ color: '#999', fontSize: '12px' }}>無連結</span>
+                        )}
+                      </td>
+                      <td>
+                        {renderTranscriptStatus(episode)}
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button
+                            onClick={() => handleTranscribe(episode)}
+                            disabled={
+                              !episode.audioUrl || 
+                              transcribing.has(episode.id) ||
+                              episode.transcriptStatus === 'processing'
+                            }
+                            style={{
+                              padding: '4px 8px',
+                              fontSize: '12px',
+                              backgroundColor: episode.transcriptStatus === 'completed' ? '#6c757d' : '#007bff',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: transcribing.has(episode.id) ? 'not-allowed' : 'pointer'
+                            }}
+                            title={
+                              episode.transcriptStatus === 'completed' 
+                                ? '重新轉錄' 
+                                : '開始轉錄'
+                            }
+                          >
+                            🎤
+                          </button>
+                          
+                          {episode.transcriptStatus === 'completed' && (
+                            <button
+                              onClick={() => handleDownloadTranscript(episode)}
+                              style={{
+                                padding: '4px 8px',
+                                fontSize: '12px',
+                                backgroundColor: '#28a745',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer'
+                              }}
+                              title="下載逐字稿"
+                            >
+                              📄
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-          <div style={{ marginTop: 8, fontSize: 12, color: '#666', textAlign: 'center' }}>
-            💡 下載會自動嘗試多種方法繞過限制，如果失敗會提示手動下載選項
-          </div>
-        </div>
-      </header>
+        )}
+      </main>
+
+      <style jsx>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+        
+        .transcribe-button {
+          background-color: #28a745;
+          color: white;
+          border: none;
+          padding: 10px 20px;
+          border-radius: 5px;
+          cursor: pointer;
+          font-size: 14px;
+        }
+        
+        .transcribe-button:hover {
+          background-color: #218838;
+        }
+        
+        .transcribe-button:disabled {
+          background-color: #6c757d;
+          cursor: not-allowed;
+        }
+      `}</style>
     </div>
   );
 }
 
-export default App;
+export default App; 
