@@ -149,38 +149,73 @@ function App() {
 
   // 下載音檔用於轉錄
   const downloadAudioForTranscription = async (audioUrl: string): Promise<Blob> => {
-    const corsProxies = [
-      '',
-      'https://api.allorigins.win/raw?url=',
-      'https://corsproxy.io/?',
-    ];
-
-    let lastError: Error | null = null;
-
-    for (const proxy of corsProxies) {
-      try {
-        const requestUrl = proxy ? proxy + encodeURIComponent(audioUrl) : audioUrl;
-        console.log(`嘗試下載音檔: ${proxy || '直接請求'}`);
-        
-        const response = await fetch(requestUrl);
-        
-        if (response.ok) {
-          const contentLength = response.headers.get('content-length');
-          if (contentLength) {
-            console.log(`音檔大小: ${(parseInt(contentLength) / 1024 / 1024).toFixed(2)}MB`);
-          }
-          return await response.blob();
-        } else {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-      } catch (error) {
-        console.log(`下載音檔失敗 (${proxy || '直接請求'}):`, error);
-        lastError = error instanceof Error ? error : new Error(String(error));
-        continue;
-      }
-    }
+    console.log(`使用後端代理下載音檔: ${audioUrl}`);
     
-    throw new Error(`無法下載音檔進行轉錄: ${lastError?.message || '所有代理都失敗'}`);
+    try {
+      // 使用後端代理 API 下載音檔
+      const response = await fetch('/api/download', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          audioUrl: audioUrl,
+          title: 'audio'
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('代理下載 API 錯誤:', errorText);
+        throw new Error(`代理下載失敗 (${response.status}): ${response.statusText}\n${errorText}`);
+      }
+
+      const contentLength = response.headers.get('content-length');
+      if (contentLength) {
+        console.log(`音檔大小: ${(parseInt(contentLength) / 1024 / 1024).toFixed(2)}MB`);
+      }
+
+      const audioBlob = await response.blob();
+      console.log(`音檔下載完成，實際大小: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
+      
+      return audioBlob;
+    } catch (error) {
+      console.error('後端代理下載失敗，嘗試使用 CORS 代理:', error);
+      
+      // 如果後端代理失敗，回退到原來的 CORS 代理方法
+      const corsProxies = [
+        '',
+        'https://api.allorigins.win/raw?url=',
+        'https://corsproxy.io/?',
+      ];
+
+      let lastError: Error | null = null;
+
+      for (const proxy of corsProxies) {
+        try {
+          const requestUrl = proxy ? proxy + encodeURIComponent(audioUrl) : audioUrl;
+          console.log(`嘗試下載音檔: ${proxy || '直接請求'}`);
+          
+          const response = await fetch(requestUrl);
+          
+          if (response.ok) {
+            const contentLength = response.headers.get('content-length');
+            if (contentLength) {
+              console.log(`音檔大小: ${(parseInt(contentLength) / 1024 / 1024).toFixed(2)}MB`);
+            }
+            return await response.blob();
+          } else {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+        } catch (error) {
+          console.log(`下載音檔失敗 (${proxy || '直接請求'}):`, error);
+          lastError = error instanceof Error ? error : new Error(String(error));
+          continue;
+        }
+      }
+      
+      throw new Error(`無法下載音檔進行轉錄: ${lastError?.message || '所有方法都失敗'}`);
+    }
   };
 
   // 上傳音檔到後端進行轉錄

@@ -10,6 +10,11 @@
       "runtime": "nodejs18.x",
       "timeout": 300,
       "memory": 1024
+    },
+    "api/download.js": {
+      "runtime": "nodejs18.x",
+      "timeout": 300,
+      "memory": 1024
     }
   },
   "routes": [
