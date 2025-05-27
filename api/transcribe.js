@@ -10,7 +10,14 @@ const openai = new OpenAI({
 
 // 主要處理函數
 async function handler(req, res) {
-  console.log(`API 請求: ${req.method} ${req.url}`);
+  console.log(`=== API 請求開始 ===`);
+  console.log(`方法: ${req.method}`);
+  console.log(`URL: ${req.url}`);
+  console.log(`Headers:`, JSON.stringify(req.headers, null, 2));
+  console.log(`環境變數檢查:`);
+  console.log(`- OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? '已設置' : '未設置'}`);
+  console.log(`- PASSWORD: ${process.env.PASSWORD ? '已設置' : '未設置'}`);
+  console.log(`- PORT: ${process.env.PORT || '未設置'}`);
   
   // 設定 CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -25,7 +32,7 @@ async function handler(req, res) {
 
   if (req.method !== 'POST') {
     console.log(`不支援的方法: ${req.method}`);
-    res.status(405).json({ error: '只支援 POST 請求' });
+    res.status(405).json({ error: `只支援 POST 請求，收到: ${req.method}` });
     return;
   }
 
@@ -38,7 +45,11 @@ async function handler(req, res) {
       keepExtensions: true,
     });
 
+    console.log('開始解析表單數據...');
     const [fields, files] = await form.parse(req);
+    console.log('表單解析完成');
+    console.log('Fields:', Object.keys(fields));
+    console.log('Files:', Object.keys(files));
     
     const audioFile = files.audio?.[0];
     const title = fields.title?.[0] || 'Unknown';
@@ -51,7 +62,9 @@ async function handler(req, res) {
     }
 
     console.log(`開始轉錄: ${title} (${episodeId})`);
+    console.log(`檔案路徑: ${audioFile.filepath}`);
     console.log(`檔案大小: ${(audioFile.size / 1024 / 1024).toFixed(2)}MB`);
+    console.log(`檔案類型: ${audioFile.mimetype}`);
 
     // 檢查檔案大小
     if (audioFile.size > 25 * 1024 * 1024) {
@@ -72,6 +85,7 @@ async function handler(req, res) {
     }
 
     console.log('開始調用 OpenAI Whisper API...');
+    const startTime = Date.now();
     
     // 使用 OpenAI Whisper API 進行轉錄
     const transcription = await openai.audio.transcriptions.create({
@@ -82,7 +96,8 @@ async function handler(req, res) {
       timestamp_granularities: ['word'],
     });
 
-    console.log('OpenAI API 調用成功');
+    const endTime = Date.now();
+    console.log(`OpenAI API 調用成功，耗時: ${(endTime - startTime) / 1000}秒`);
 
     // 清理臨時檔案
     try {
@@ -97,6 +112,7 @@ async function handler(req, res) {
 
     console.log(`轉錄完成: ${title}`);
     console.log(`文字長度: ${formattedText.length} 字元`);
+    console.log(`=== API 請求結束 ===`);
 
     // 回傳結果
     res.status(200).json({
@@ -111,7 +127,9 @@ async function handler(req, res) {
     });
 
   } catch (error) {
-    console.error('轉錄錯誤:', error);
+    console.error('=== 轉錄錯誤 ===');
+    console.error('錯誤詳情:', error);
+    console.error('錯誤堆疊:', error.stack);
     
     // 根據錯誤類型回傳不同訊息
     if (error.code === 'insufficient_quota') {
