@@ -43,12 +43,56 @@ async function handler(req, res) {
     }
 
     console.log(`開始下載音檔: ${title || 'Unknown'}`);
-    console.log(`音檔 URL: ${audioUrl}`);
+    console.log(`原始音檔 URL: ${audioUrl}`);
+
+    // SoundOn 特殊處理
+    let finalAudioUrl = audioUrl;
+    if (audioUrl.includes('soundon.fm')) {
+      console.log('檢測到 SoundOn URL，嘗試多種格式...');
+      
+      // 如果是播放器 URL，嘗試轉換
+      if (audioUrl.includes('player.soundon.fm')) {
+        const soundonMatch = audioUrl.match(/player\.soundon\.fm\/p\/([^\/]+)\/episodes\/([^\/\?]+)/);
+        if (soundonMatch) {
+          const podcastId = soundonMatch[1];
+          const episodeId = soundonMatch[2];
+          
+          const possibleUrls = [
+            `https://rss.soundon.fm/rssf/${podcastId}/feedurl/${episodeId}/rssFileVip.mp3`,
+            `https://filesb.soundon.fm/file/filesb/${episodeId}.mp3`,
+            `https://files.soundon.fm/${episodeId}.mp3`
+          ];
+          
+          // 嘗試每個可能的 URL
+          for (const testUrl of possibleUrls) {
+            try {
+              console.log(`嘗試 SoundOn URL: ${testUrl}`);
+              const audioBuffer = await downloadAudio(testUrl);
+              if (audioBuffer.length > 1024) { // 至少 1KB，避免錯誤頁面
+                finalAudioUrl = testUrl;
+                console.log(`SoundOn URL 成功: ${testUrl}`);
+                break;
+              }
+            } catch (error) {
+              console.log(`SoundOn URL 失敗: ${testUrl} - ${error.message}`);
+              continue;
+            }
+          }
+        }
+      }
+    }
+
+    console.log(`最終使用的音檔 URL: ${finalAudioUrl}`);
 
     // 下載音檔
-    const audioBuffer = await downloadAudio(audioUrl);
+    const audioBuffer = await downloadAudio(finalAudioUrl);
     
     console.log(`音檔下載完成，大小: ${(audioBuffer.length / 1024 / 1024).toFixed(2)}MB`);
+
+    // 檢查下載的內容是否為有效音檔
+    if (audioBuffer.length < 1024) {
+      throw new Error('下載的檔案太小，可能不是有效的音檔');
+    }
 
     // 設置響應 headers
     res.setHeader('Content-Type', 'audio/mpeg');

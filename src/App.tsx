@@ -431,7 +431,6 @@ function App() {
           if (guidElement) {
             const guidUrl = guidElement.textContent || '';
             if (guidUrl && guidUrl.includes('player.soundon.fm')) {
-              // 轉換 SoundOn player URL 為直接音檔 URL
               audioUrl = guidUrl;
             }
           }
@@ -446,6 +445,29 @@ function App() {
             if (audioUrlMatch) {
               audioUrl = audioUrlMatch[0];
             }
+          }
+        }
+        
+        // SoundOn 特殊處理：轉換播放器 URL 為下載 URL
+        if (audioUrl && audioUrl.includes('player.soundon.fm')) {
+          console.log(`檢測到 SoundOn 播放器 URL: ${audioUrl}`);
+          // 嘗試從播放器 URL 提取實際音檔 URL
+          // SoundOn 的 URL 格式通常是: https://player.soundon.fm/p/{podcast_id}/episodes/{episode_id}
+          const soundonMatch = audioUrl.match(/player\.soundon\.fm\/p\/([^\/]+)\/episodes\/([^\/\?]+)/);
+          if (soundonMatch) {
+            const podcastId = soundonMatch[1];
+            const episodeId = soundonMatch[2];
+            // 構建可能的音檔 URL 格式
+            const possibleUrls = [
+              `https://rss.soundon.fm/rssf/${podcastId}/feedurl/${episodeId}/rssFileVip.mp3`,
+              `https://filesb.soundon.fm/file/filesb/${episodeId}.mp3`,
+              `https://files.soundon.fm/${episodeId}.mp3`,
+              audioUrl // 保留原始 URL 作為備用
+            ];
+            
+            // 使用第一個可能的 URL
+            audioUrl = possibleUrls[0];
+            console.log(`轉換後的 SoundOn 音檔 URL: ${audioUrl}`);
           }
         }
         
