@@ -357,15 +357,44 @@ function App() {
       }
 
       const text = await response.text();
-      console.log('RSS feed 原始內容 (前 500 字元):', text.substring(0, 500));
+      console.log('RSS feed 原始內容 (前 1000 字元):', text.substring(0, 1000));
+      
+      // 清理和修復 XML 內容
+      let cleanedText = text;
+      
+      // 移除 BOM 和其他不可見字符
+      cleanedText = cleanedText.replace(/^\uFEFF/, '');
+      
+      // 修復常見的 XML 問題
+      cleanedText = cleanedText.replace(/&(?!amp;|lt;|gt;|quot;|apos;)/g, '&amp;');
+      
+      // 如果 XML 看起來不完整，嘗試修復
+      if (!cleanedText.includes('<?xml') && !cleanedText.includes('<rss')) {
+        console.log('檢測到不完整的 XML，嘗試修復...');
+        // 如果內容看起來像是從中間開始的，嘗試添加 XML 頭部
+        cleanedText = '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>' + cleanedText + '</channel></rss>';
+      }
+      
+      console.log('清理後的 XML 內容 (前 1000 字元):', cleanedText.substring(0, 1000));
       
       const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(text, 'text/xml');
+      const xmlDoc = parser.parseFromString(cleanedText, 'text/xml');
       
       const parseError = xmlDoc.querySelector('parsererror');
       if (parseError) {
         console.error('XML 解析錯誤:', parseError.textContent);
-        throw new Error('RSS feed 格式錯誤');
+        console.log('嘗試使用 HTML 解析器...');
+        
+        // 如果 XML 解析失敗，嘗試使用 HTML 解析器
+        const htmlDoc = parser.parseFromString(cleanedText, 'text/html');
+        const items = htmlDoc.querySelectorAll('item');
+        
+        if (items.length === 0) {
+          throw new Error('RSS feed 格式錯誤，無法解析');
+        }
+        
+        console.log(`使用 HTML 解析器找到 ${items.length} 個 item 元素`);
+        return parseItemsFromDocument(htmlDoc, items);
       }
 
       const items = xmlDoc.querySelectorAll('item');
@@ -375,133 +404,141 @@ function App() {
         throw new Error('RSS feed 中沒有找到任何集數');
       }
 
-      const parsedEpisodes: Episode[] = Array.from(items).map((item, index) => {
-        // 提取標題 - 處理 CDATA
-        const titleElement = item.querySelector('title');
-        let title = titleElement?.textContent || `EP${index + 1}`;
-        
-        // 清理 CDATA 標記
-        title = title.replace(/^\s*<!\[CDATA\[/, '').replace(/\]\]>\s*$/, '').trim();
-        
-        // 提取發布日期
-        const pubDateElement = item.querySelector('pubDate');
-        let pubDate = pubDateElement?.textContent || '';
-        
-        // 提取時長 - 嘗試多種格式
-        let duration = '';
-        const durationSelectors = [
-          'itunes\\:duration',
-          'duration',
-          'enclosure[length]'
-        ];
-        
-        for (const selector of durationSelectors) {
-          const durationElement = item.querySelector(selector);
-          if (durationElement) {
-            duration = durationElement.textContent || durationElement.getAttribute('length') || '';
-            if (duration) break;
-          }
-        }
-        
-        if (!duration) duration = '00:00';
-        
-        // 提取音檔 URL - 嘗試多種方式
-        let audioUrl = '';
-        
-        // 方法 1: enclosure 標籤
-        const enclosureElement = item.querySelector('enclosure');
-        if (enclosureElement) {
-          audioUrl = enclosureElement.getAttribute('url') || '';
-        }
-        
-        // 方法 2: link 標籤
-        if (!audioUrl) {
-          const linkElement = item.querySelector('link');
-          if (linkElement) {
-            const linkUrl = linkElement.textContent || '';
-            if (linkUrl && (linkUrl.includes('.mp3') || linkUrl.includes('.m4a') || linkUrl.includes('player.soundon.fm'))) {
-              audioUrl = linkUrl;
-            }
-          }
-        }
-        
-        // 方法 3: guid 標籤 (SoundOn 特有)
-        if (!audioUrl) {
-          const guidElement = item.querySelector('guid');
-          if (guidElement) {
-            const guidUrl = guidElement.textContent || '';
-            if (guidUrl && guidUrl.includes('player.soundon.fm')) {
-              audioUrl = guidUrl;
-            }
-          }
-        }
-        
-        // 方法 4: 在描述中尋找音檔連結
-        if (!audioUrl) {
-          const descriptionElement = item.querySelector('description');
-          if (descriptionElement) {
-            const description = descriptionElement.textContent || '';
-            const audioUrlMatch = description.match(/https?:\/\/[^\s]+\.(mp3|m4a|wav|ogg)/i);
-            if (audioUrlMatch) {
-              audioUrl = audioUrlMatch[0];
-            }
-          }
-        }
-        
-        // SoundOn 特殊處理：轉換播放器 URL 為下載 URL
-        if (audioUrl && audioUrl.includes('player.soundon.fm')) {
-          console.log(`檢測到 SoundOn 播放器 URL: ${audioUrl}`);
-          // 嘗試從播放器 URL 提取實際音檔 URL
-          // SoundOn 的 URL 格式通常是: https://player.soundon.fm/p/{podcast_id}/episodes/{episode_id}
-          const soundonMatch = audioUrl.match(/player\.soundon\.fm\/p\/([^\/]+)\/episodes\/([^\/\?]+)/);
-          if (soundonMatch) {
-            const podcastId = soundonMatch[1];
-            const episodeId = soundonMatch[2];
-            // 構建可能的音檔 URL 格式
-            const possibleUrls = [
-              `https://rss.soundon.fm/rssf/${podcastId}/feedurl/${episodeId}/rssFileVip.mp3`,
-              `https://filesb.soundon.fm/file/filesb/${episodeId}.mp3`,
-              `https://files.soundon.fm/${episodeId}.mp3`,
-              audioUrl // 保留原始 URL 作為備用
-            ];
-            
-            // 使用第一個可能的 URL
-            audioUrl = possibleUrls[0];
-            console.log(`轉換後的 SoundOn 音檔 URL: ${audioUrl}`);
-          }
-        }
-        
-        console.log(`集數 ${index + 1}:`, {
-          title: title.substring(0, 50),
-          pubDate,
-          duration,
-          audioUrl: audioUrl.substring(0, 100)
-        });
-        
-        return {
-          id: String(index + 1),
-          title,
-          pubDate,
-          duration,
-          audioUrl,
-          transcriptStatus: 'none',
-        };
-      });
-      
-      setEpisodes(parsedEpisodes);
-      console.log(`成功解析 ${parsedEpisodes.length} 個集數`);
-      
-      // 檢查有多少集數有音檔連結
-      const episodesWithAudio = parsedEpisodes.filter(ep => ep.audioUrl);
-      console.log(`其中 ${episodesWithAudio.length} 個集數有音檔連結`);
-      
-      if (episodesWithAudio.length === 0) {
-        alert('警告：解析成功但沒有找到任何音檔連結。這可能是因為該 Podcast 平台使用了特殊的音檔保護機制。');
-      }
+      return parseItemsFromDocument(xmlDoc, items);
       
     } catch (error) {
       console.error('解析 RSS feed 時發生錯誤:', error);
       alert(`解析 RSS feed 失敗：${error instanceof Error ? error.message : '未知錯誤'}\n\n請確認連結是否正確，或稍後再試。`);
+    }
+  };
+
+  // 從文檔中解析 item 元素
+  const parseItemsFromDocument = (doc: Document, items: NodeListOf<Element>) => {
+    const parsedEpisodes: Episode[] = Array.from(items).map((item, index) => {
+      // 提取標題 - 處理 CDATA
+      const titleElement = item.querySelector('title');
+      let title = titleElement?.textContent || `EP${index + 1}`;
+      
+      // 清理 CDATA 標記和其他特殊字符
+      title = title.replace(/^\s*<!\[CDATA\[/, '').replace(/\]\]>\s*$/, '').trim();
+      title = title.replace(/\s+/g, ' ').trim();
+      
+      // 提取發布日期
+      const pubDateElement = item.querySelector('pubDate');
+      let pubDate = pubDateElement?.textContent || '';
+      
+      // 提取時長 - 嘗試多種格式
+      let duration = '';
+      const durationSelectors = [
+        'itunes\\:duration',
+        'duration',
+        'enclosure[length]'
+      ];
+      
+      for (const selector of durationSelectors) {
+        const durationElement = item.querySelector(selector);
+        if (durationElement) {
+          duration = durationElement.textContent || durationElement.getAttribute('length') || '';
+          if (duration) break;
+        }
+      }
+      
+      if (!duration) duration = '00:00';
+      
+      // 提取音檔 URL - 嘗試多種方式
+      let audioUrl = '';
+      
+      // 方法 1: enclosure 標籤
+      const enclosureElement = item.querySelector('enclosure');
+      if (enclosureElement) {
+        audioUrl = enclosureElement.getAttribute('url') || '';
+      }
+      
+      // 方法 2: link 標籤
+      if (!audioUrl) {
+        const linkElement = item.querySelector('link');
+        if (linkElement) {
+          const linkUrl = linkElement.textContent || '';
+          if (linkUrl && (linkUrl.includes('.mp3') || linkUrl.includes('.m4a') || linkUrl.includes('player.soundon.fm'))) {
+            audioUrl = linkUrl;
+          }
+        }
+      }
+      
+      // 方法 3: guid 標籤 (SoundOn 特有)
+      if (!audioUrl) {
+        const guidElement = item.querySelector('guid');
+        if (guidElement) {
+          const guidUrl = guidElement.textContent || '';
+          if (guidUrl && guidUrl.includes('player.soundon.fm')) {
+            audioUrl = guidUrl;
+          }
+        }
+      }
+      
+      // 方法 4: 在描述中尋找音檔連結
+      if (!audioUrl) {
+        const descriptionElement = item.querySelector('description');
+        if (descriptionElement) {
+          const description = descriptionElement.textContent || '';
+          const audioUrlMatch = description.match(/https?:\/\/[^\s]+\.(mp3|m4a|wav|ogg)/i);
+          if (audioUrlMatch) {
+            audioUrl = audioUrlMatch[0];
+          }
+        }
+      }
+      
+      // SoundOn 特殊處理：轉換播放器 URL 為下載 URL
+      if (audioUrl && audioUrl.includes('player.soundon.fm')) {
+        console.log(`檢測到 SoundOn 播放器 URL: ${audioUrl}`);
+        // 嘗試從播放器 URL 提取實際音檔 URL
+        // SoundOn 的 URL 格式通常是: https://player.soundon.fm/p/{podcast_id}/episodes/{episode_id}
+        const soundonMatch = audioUrl.match(/player\.soundon\.fm\/p\/([^\/]+)\/episodes\/([^\/\?]+)/);
+        if (soundonMatch) {
+          const podcastId = soundonMatch[1];
+          const episodeId = soundonMatch[2];
+          // 構建可能的音檔 URL 格式
+          const possibleUrls = [
+            `https://rss.soundon.fm/rssf/${podcastId}/feedurl/${episodeId}/rssFileVip.mp3`,
+            `https://filesb.soundon.fm/file/filesb/${episodeId}.mp3`,
+            `https://files.soundon.fm/${episodeId}.mp3`,
+            audioUrl // 保留原始 URL 作為備用
+          ];
+          
+          // 使用第一個可能的 URL
+          audioUrl = possibleUrls[0];
+          console.log(`轉換後的 SoundOn 音檔 URL: ${audioUrl}`);
+        }
+      }
+      
+      console.log(`集數 ${index + 1}:`, {
+        title: title.substring(0, 50),
+        pubDate,
+        duration,
+        audioUrl: audioUrl.substring(0, 100)
+      });
+      
+      return {
+        id: String(index + 1),
+        title,
+        pubDate,
+        duration,
+        audioUrl,
+        transcriptStatus: 'none' as const,
+      };
+    });
+    
+    setEpisodes(parsedEpisodes);
+    console.log(`成功解析 ${parsedEpisodes.length} 個集數`);
+    
+    // 檢查有多少集數有音檔連結
+    const episodesWithAudio = parsedEpisodes.filter(ep => ep.audioUrl);
+    console.log(`其中 ${episodesWithAudio.length} 個集數有音檔連結`);
+    
+    if (episodesWithAudio.length === 0) {
+      alert('警告：解析成功但沒有找到任何音檔連結。這可能是因為該 Podcast 平台使用了特殊的音檔保護機制。');
+    } else {
+      alert(`成功載入 ${parsedEpisodes.length} 個集數，其中 ${episodesWithAudio.length} 個有音檔連結！`);
     }
   };
 
