@@ -23,6 +23,10 @@
     "api/transcribe.js": {
       "maxDuration": 300,
       "memory": 1024
+    },
+    "api/download.js": {
+      "maxDuration": 300,
+      "memory": 1024
     }
   }
 } 
