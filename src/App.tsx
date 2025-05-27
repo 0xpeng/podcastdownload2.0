@@ -58,6 +58,9 @@ function App() {
       return;
     }
 
+    console.log(`開始轉錄: ${episode.title}`);
+    console.log(`音檔 URL: ${episode.audioUrl}`);
+
     setTranscribing(prev => {
       const newSet = new Set(prev);
       newSet.add(episode.id);
@@ -78,20 +81,30 @@ function App() {
 
     try {
       // 1. 下載音檔
+      console.log('步驟 1: 開始下載音檔...');
       setTranscriptProgress(prev => {
         const newMap = new Map(prev);
-        newMap.set(episode.id, 20);
+        newMap.set(episode.id, 10);
         return newMap;
       });
+      
+      const startDownload = Date.now();
       const audioBlob = await downloadAudioForTranscription(episode.audioUrl);
+      const downloadTime = Date.now() - startDownload;
+      console.log(`音檔下載完成，耗時: ${downloadTime}ms，大小: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
       
       // 2. 上傳到後端進行轉錄
+      console.log('步驟 2: 開始上傳並轉錄...');
       setTranscriptProgress(prev => {
         const newMap = new Map(prev);
-        newMap.set(episode.id, 50);
+        newMap.set(episode.id, 30);
         return newMap;
       });
+      
+      const startTranscribe = Date.now();
       const transcript = await uploadForTranscription(audioBlob, episode);
+      const transcribeTime = Date.now() - startTranscribe;
+      console.log(`轉錄完成，耗時: ${transcribeTime}ms`);
       
       // 3. 更新狀態
       setTranscriptProgress(prev => {
@@ -110,6 +123,7 @@ function App() {
           : ep
       ));
 
+      console.log(`"${episode.title}" 轉錄完成！`);
       alert(`"${episode.title}" 轉錄完成！`);
     } catch (error) {
       console.error('轉錄失敗:', error);
@@ -141,25 +155,38 @@ function App() {
       'https://corsproxy.io/?',
     ];
 
+    let lastError: Error | null = null;
+
     for (const proxy of corsProxies) {
       try {
         const requestUrl = proxy ? proxy + encodeURIComponent(audioUrl) : audioUrl;
+        console.log(`嘗試下載音檔: ${proxy || '直接請求'}`);
+        
         const response = await fetch(requestUrl);
         
         if (response.ok) {
+          const contentLength = response.headers.get('content-length');
+          if (contentLength) {
+            console.log(`音檔大小: ${(parseInt(contentLength) / 1024 / 1024).toFixed(2)}MB`);
+          }
           return await response.blob();
+        } else {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
       } catch (error) {
         console.log(`下載音檔失敗 (${proxy || '直接請求'}):`, error);
+        lastError = error instanceof Error ? error : new Error(String(error));
         continue;
       }
     }
     
-    throw new Error('無法下載音檔進行轉錄');
+    throw new Error(`無法下載音檔進行轉錄: ${lastError?.message || '所有代理都失敗'}`);
   };
 
   // 上傳音檔到後端進行轉錄
   const uploadForTranscription = async (audioBlob: Blob, episode: Episode) => {
+    console.log(`準備上傳音檔進行轉錄，檔案大小: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
+    
     const formData = new FormData();
     formData.append('audio', audioBlob, `${episode.title}.mp3`);
     formData.append('title', episode.title);
@@ -171,10 +198,14 @@ function App() {
     });
 
     if (!response.ok) {
-      throw new Error(`轉錄服務錯誤: ${response.statusText}`);
+      const errorText = await response.text();
+      console.error('轉錄 API 錯誤:', errorText);
+      throw new Error(`轉錄服務錯誤 (${response.status}): ${response.statusText}\n${errorText}`);
     }
 
-    return await response.json();
+    const result = await response.json();
+    console.log('轉錄結果:', result);
+    return result;
   };
 
   // 下載逐字稿
