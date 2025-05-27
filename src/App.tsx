@@ -702,31 +702,6 @@ function App() {
         )}
       </main>
 
-      <style>{`
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-        
-        .transcribe-button {
-          background-color: #28a745;
-          color: white;
-          border: none;
-          padding: 10px 20px;
-          border-radius: 5px;
-          cursor: pointer;
-          font-size: 14px;
-        }
-        
-        .transcribe-button:hover {
-          background-color: #218838;
-        }
-        
-        .transcribe-button:disabled {
-          background-color: #6c757d;
-          cursor: not-allowed;
-        }
-      `}</style>
     </div>
   );
 }
