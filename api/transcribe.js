@@ -9,7 +9,7 @@ const openai = new OpenAI({
 });
 
 // 主要處理函數
-async function handler(req, res) {
+function handler(req, res) {
   console.log(`=== API 請求開始 ===`);
   console.log(`方法: ${req.method}`);
   console.log(`URL: ${req.url}`);
@@ -36,17 +36,23 @@ async function handler(req, res) {
     return;
   }
 
-  try {
-    console.log('開始處理轉錄請求...');
-    
-    // 解析上傳的檔案
-    const form = formidable({
-      maxFileSize: 25 * 1024 * 1024, // 25MB 限制
-      keepExtensions: true,
-    });
+  console.log('開始處理轉錄請求...');
+  
+  // 解析上傳的檔案
+  const form = formidable({
+    maxFileSize: 25 * 1024 * 1024, // 25MB 限制
+    keepExtensions: true,
+  });
 
-    console.log('開始解析表單數據...');
-    const [fields, files] = await form.parse(req);
+  console.log('開始解析表單數據...');
+  
+  form.parse(req, (err, fields, files) => {
+    if (err) {
+      console.error('表單解析錯誤:', err);
+      res.status(400).json({ error: `表單解析失敗: ${err.message}` });
+      return;
+    }
+
     console.log('表單解析完成');
     console.log('Fields:', Object.keys(fields));
     console.log('Files:', Object.keys(files));
@@ -88,64 +94,73 @@ async function handler(req, res) {
     const startTime = Date.now();
     
     // 使用 OpenAI Whisper API 進行轉錄
-    const transcription = await openai.audio.transcriptions.create({
+    openai.audio.transcriptions.create({
       file: fs.createReadStream(audioFile.filepath),
       model: 'whisper-1',
       language: 'zh', // 指定中文
       response_format: 'verbose_json',
       timestamp_granularities: ['word'],
+    })
+    .then(transcription => {
+      const endTime = Date.now();
+      console.log(`OpenAI API 調用成功，耗時: ${(endTime - startTime) / 1000}秒`);
+
+      // 清理臨時檔案
+      try {
+        fs.unlinkSync(audioFile.filepath);
+        console.log('臨時檔案清理成功');
+      } catch (cleanupError) {
+        console.warn('清理臨時檔案失敗:', cleanupError);
+      }
+
+      // 格式化逐字稿文字
+      const formattedText = formatTranscript(transcription);
+
+      console.log(`轉錄完成: ${title}`);
+      console.log(`文字長度: ${formattedText.length} 字元`);
+      console.log(`=== API 請求結束 ===`);
+
+      // 回傳結果
+      res.status(200).json({
+        success: true,
+        episodeId,
+        title,
+        text: formattedText,
+        duration: transcription.duration,
+        language: transcription.language,
+        segments: transcription.segments || [],
+        url: null, // 可以後續實作檔案儲存
+      });
+    })
+    .catch(error => {
+      console.error('=== 轉錄錯誤 ===');
+      console.error('錯誤詳情:', error);
+      console.error('錯誤堆疊:', error.stack);
+      
+      // 清理臨時檔案
+      try {
+        fs.unlinkSync(audioFile.filepath);
+        console.log('錯誤時臨時檔案清理成功');
+      } catch (cleanupError) {
+        console.warn('錯誤時清理臨時檔案失敗:', cleanupError);
+      }
+      
+      // 根據錯誤類型回傳不同訊息
+      if (error.code === 'insufficient_quota') {
+        res.status(402).json({ 
+          error: 'OpenAI API 額度不足，請檢查帳戶餘額' 
+        });
+      } else if (error.code === 'invalid_request_error') {
+        res.status(400).json({ 
+          error: '音檔格式不支援或檔案損壞' 
+        });
+      } else {
+        res.status(500).json({ 
+          error: `轉錄失敗: ${error.message}` 
+        });
+      }
     });
-
-    const endTime = Date.now();
-    console.log(`OpenAI API 調用成功，耗時: ${(endTime - startTime) / 1000}秒`);
-
-    // 清理臨時檔案
-    try {
-      fs.unlinkSync(audioFile.filepath);
-      console.log('臨時檔案清理成功');
-    } catch (cleanupError) {
-      console.warn('清理臨時檔案失敗:', cleanupError);
-    }
-
-    // 格式化逐字稿文字
-    const formattedText = formatTranscript(transcription);
-
-    console.log(`轉錄完成: ${title}`);
-    console.log(`文字長度: ${formattedText.length} 字元`);
-    console.log(`=== API 請求結束 ===`);
-
-    // 回傳結果
-    res.status(200).json({
-      success: true,
-      episodeId,
-      title,
-      text: formattedText,
-      duration: transcription.duration,
-      language: transcription.language,
-      segments: transcription.segments || [],
-      url: null, // 可以後續實作檔案儲存
-    });
-
-  } catch (error) {
-    console.error('=== 轉錄錯誤 ===');
-    console.error('錯誤詳情:', error);
-    console.error('錯誤堆疊:', error.stack);
-    
-    // 根據錯誤類型回傳不同訊息
-    if (error.code === 'insufficient_quota') {
-      res.status(402).json({ 
-        error: 'OpenAI API 額度不足，請檢查帳戶餘額' 
-      });
-    } else if (error.code === 'invalid_request_error') {
-      res.status(400).json({ 
-        error: '音檔格式不支援或檔案損壞' 
-      });
-    } else {
-      res.status(500).json({ 
-        error: `轉錄失敗: ${error.message}` 
-      });
-    }
-  }
+  });
 }
 
 // 格式化逐字稿文字
