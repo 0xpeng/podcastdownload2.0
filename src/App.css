@@ -1,13 +1,14 @@
 .App {
   text-align: center;
   min-height: 100vh;
-  background-color: #f5f5f5;
+  background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
 }
 
 .App-header {
-  background-color: #282c34;
+  background: linear-gradient(135deg, #0f3460 0%, #0e4b99 100%);
   padding: 20px;
   color: white;
+  box-shadow: 0 4px 20px rgba(14, 75, 153, 0.3);
 }
 
 .App-header h1 {
@@ -28,10 +29,12 @@
 }
 
 .input-section {
-  background: white;
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   padding: 30px;
-  border-radius: 10px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  border-radius: 15px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
   margin-bottom: 30px;
 }
 
@@ -44,48 +47,63 @@
 .rss-input {
   flex: 1;
   padding: 12px;
-  border: 2px solid #ddd;
-  border-radius: 5px;
+  border: 2px solid rgba(0, 212, 255, 0.3);
+  border-radius: 8px;
   font-size: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  color: white;
+  transition: all 0.3s ease;
 }
 
 .rss-input:focus {
   outline: none;
-  border-color: #007bff;
+  border-color: #00d4ff;
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+}
+
+.rss-input::placeholder {
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .load-button {
   padding: 12px 24px;
-  background-color: #007bff;
+  background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
   color: white;
   border: none;
-  border-radius: 5px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 16px;
   font-weight: bold;
+  box-shadow: 0 4px 15px rgba(0, 212, 255, 0.3);
+  transition: all 0.3s ease;
 }
 
 .load-button:hover {
-  background-color: #0056b3;
+  background: linear-gradient(135deg, #0099cc 0%, #007399 100%);
+  box-shadow: 0 6px 20px rgba(0, 212, 255, 0.4);
+  transform: translateY(-2px);
 }
 
 .hint {
-  color: #666;
+  color: rgba(255, 255, 255, 0.7);
   font-size: 14px;
   margin: 0;
 }
 
 .episodes-section {
-  background: white;
-  border-radius: 10px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 15px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
   overflow: hidden;
 }
 
 .controls {
   padding: 20px;
-  background-color: #f8f9fa;
-  border-bottom: 1px solid #dee2e6;
+  background: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -106,74 +124,93 @@
 
 .select-button {
   padding: 8px 16px;
-  background-color: #6c757d;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   font-size: 14px;
+  box-shadow: 0 3px 10px rgba(102, 126, 234, 0.3);
+  transition: all 0.3s ease;
 }
 
 .select-button:hover {
-  background-color: #5a6268;
+  background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+  transform: translateY(-1px);
 }
 
 .selected-count {
   font-size: 14px;
-  color: #666;
+  color: #00d4ff;
   font-weight: bold;
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
 }
 
 .download-button {
   padding: 10px 20px;
-  background-color: #007bff;
+  background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
   color: white;
   border: none;
-  border-radius: 5px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 14px;
   font-weight: bold;
+  box-shadow: 0 4px 15px rgba(0, 212, 255, 0.3);
+  transition: all 0.3s ease;
 }
 
 .download-button:hover {
-  background-color: #0056b3;
+  background: linear-gradient(135deg, #0099cc 0%, #007399 100%);
+  box-shadow: 0 6px 20px rgba(0, 212, 255, 0.4);
+  transform: translateY(-2px);
 }
 
 .download-button:disabled {
-  background-color: #6c757d;
+  background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
   cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 
 .transcribe-button {
-  background-color: #28a745;
-  color: white;
+  background: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%);
+  color: #1a202c;
   border: none;
   padding: 10px 20px;
-  border-radius: 5px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 14px;
   font-weight: bold;
+  box-shadow: 0 4px 15px rgba(0, 255, 136, 0.3);
+  transition: all 0.3s ease;
 }
 
 .transcribe-button:hover {
-  background-color: #218838;
+  background: linear-gradient(135deg, #00cc6a 0%, #009954 100%);
+  box-shadow: 0 6px 20px rgba(0, 255, 136, 0.4);
+  transform: translateY(-2px);
 }
 
 .transcribe-button:disabled {
-  background-color: #6c757d;
+  background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+  color: #a0aec0;
   cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 
 .progress-section {
   padding: 20px;
-  background-color: #f8f9fa;
-  border-bottom: 1px solid #dee2e6;
+  background: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .progress-bar {
   width: 100%;
   height: 20px;
-  background-color: #e9ecef;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 10px;
   overflow: hidden;
   margin-bottom: 10px;
@@ -181,8 +218,9 @@
 
 .progress-fill {
   height: 100%;
-  background-color: #007bff;
+  background: linear-gradient(90deg, #00d4ff 0%, #00ff88 100%);
   transition: width 0.3s ease;
+  box-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
 }
 
 .episodes-table {
@@ -198,27 +236,30 @@
 .episodes-table td {
   padding: 12px;
   text-align: left;
-  border-bottom: 1px solid #dee2e6;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .episodes-table th {
-  background-color: #f8f9fa;
+  background: rgba(0, 0, 0, 0.3);
   font-weight: bold;
-  color: #495057;
+  color: #00d4ff;
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.3);
 }
 
 .episodes-table tr:hover {
-  background-color: #f8f9fa;
+  background: rgba(0, 212, 255, 0.1);
 }
 
 .episode-title {
   font-weight: bold;
-  color: #333;
+  color: white;
   max-width: 300px;
 }
 
 .audio-url {
   max-width: 200px;
+  color: rgba(255, 255, 255, 0.8);
 }
 
 .transcript-progress {
@@ -230,15 +271,17 @@
 .transcript-progress-bar {
   width: 100px;
   height: 8px;
-  background-color: #e9ecef;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 4px;
   overflow: hidden;
 }
 
 .transcript-progress-fill {
   height: 100%;
-  background-color: #28a745;
+  background: linear-gradient(90deg, #00ff88 0%, #00d4ff 100%);
   transition: width 0.3s ease;
+  box-shadow: 0 0 8px rgba(0, 255, 136, 0.5);
 }
 
 .transcript-status {
@@ -247,19 +290,22 @@
 }
 
 .transcript-status.processing {
-  color: #007bff;
+  color: #00d4ff;
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
 }
 
 .transcript-status.completed {
-  color: #28a745;
+  color: #00ff88;
+  text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
 }
 
 .transcript-status.error {
-  color: #dc3545;
+  color: #ff4757;
+  text-shadow: 0 0 10px rgba(255, 71, 87, 0.5);
 }
 
 .transcript-status.none {
-  color: #6c757d;
+  color: rgba(255, 255, 255, 0.6);
 }
 
 @keyframes spin {
@@ -319,16 +365,22 @@
 }
 
 .copy-button {
-  background: none;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
   border: none;
+  padding: 4px 8px;
+  border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
-  padding: 2px 4px;
-  border-radius: 3px;
+  margin-left: 8px;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+  transition: all 0.3s ease;
 }
 
 .copy-button:hover {
-  background-color: #f8f9fa;
+  background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  transform: translateY(-1px);
 }
 
 .no-link {
@@ -343,28 +395,45 @@
 }
 
 .action-button {
-  padding: 4px 8px;
-  font-size: 12px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border: none;
-  border-radius: 4px;
+  padding: 6px 12px;
+  border-radius: 6px;
   cursor: pointer;
+  font-size: 12px;
+  margin: 0 2px;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+  transition: all 0.3s ease;
+}
+
+.action-button:hover {
+  background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  transform: translateY(-1px);
 }
 
 .action-button:disabled {
+  background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+  color: #a0aec0;
   cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 
 .transcribe-action-button {
-  background-color: #007bff;
+  background: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%);
+  color: #1a202c;
 }
 
 .transcribe-action-button.completed {
-  background-color: #6c757d;
+  background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+  color: #a0aec0;
 }
 
 .download-transcript-button {
-  background-color: #28a745;
+  background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
+  color: white;
 }
 
 /* 轉錄按鈕樣式覆蓋 */
