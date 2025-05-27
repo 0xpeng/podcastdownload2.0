@@ -509,7 +509,7 @@ function App() {
   return (
     <div className="App">
       <header className="App-header">
-        <h1>🎧 Podcast批量下載與轉錄工具</h1>
+        <h1> Podcast批量下載與轉錄工具</h1>
         <p>輸入 RSS feed 連結，批量下載 podcast 集數並生成逐字稿</p>
       </header>
 
