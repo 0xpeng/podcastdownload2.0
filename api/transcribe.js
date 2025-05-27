@@ -8,23 +8,30 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-module.exports = async function handler(req, res) {
+// 主要處理函數
+async function handler(req, res) {
+  console.log(`API 請求: ${req.method} ${req.url}`);
+  
   // 設定 CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
+    console.log('處理 OPTIONS 請求');
     res.status(200).end();
     return;
   }
 
   if (req.method !== 'POST') {
+    console.log(`不支援的方法: ${req.method}`);
     res.status(405).json({ error: '只支援 POST 請求' });
     return;
   }
 
   try {
+    console.log('開始處理轉錄請求...');
+    
     // 解析上傳的檔案
     const form = formidable({
       maxFileSize: 25 * 1024 * 1024, // 25MB 限制
@@ -38,6 +45,7 @@ module.exports = async function handler(req, res) {
     const episodeId = fields.episodeId?.[0] || 'unknown';
 
     if (!audioFile) {
+      console.log('沒有找到音檔');
       res.status(400).json({ error: '沒有找到音檔' });
       return;
     }
@@ -47,12 +55,24 @@ module.exports = async function handler(req, res) {
 
     // 檢查檔案大小
     if (audioFile.size > 25 * 1024 * 1024) {
+      console.log('音檔太大');
       res.status(400).json({ 
         error: '音檔太大，請確保檔案小於 25MB' 
       });
       return;
     }
 
+    // 檢查 OpenAI API 金鑰
+    if (!process.env.OPENAI_API_KEY) {
+      console.error('OpenAI API 金鑰未設置');
+      res.status(500).json({ 
+        error: 'OpenAI API 金鑰未設置' 
+      });
+      return;
+    }
+
+    console.log('開始調用 OpenAI Whisper API...');
+    
     // 使用 OpenAI Whisper API 進行轉錄
     const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream(audioFile.filepath),
@@ -62,9 +82,12 @@ module.exports = async function handler(req, res) {
       timestamp_granularities: ['word'],
     });
 
+    console.log('OpenAI API 調用成功');
+
     // 清理臨時檔案
     try {
       fs.unlinkSync(audioFile.filepath);
+      console.log('臨時檔案清理成功');
     } catch (cleanupError) {
       console.warn('清理臨時檔案失敗:', cleanupError);
     }
@@ -105,7 +128,7 @@ module.exports = async function handler(req, res) {
       });
     }
   }
-};
+}
 
 // 格式化逐字稿文字
 function formatTranscript(transcription) {
@@ -130,3 +153,7 @@ function formatTime(seconds) {
   const remainingSeconds = Math.floor(seconds % 60);
   return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
 }
+
+// 導出處理函數
+module.exports = handler;
+module.exports.default = handler;
