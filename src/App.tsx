@@ -58,8 +58,16 @@ function App() {
       return;
     }
 
-    setTranscribing(prev => { const newSet = new Set(prev); newSet.add(episode.id); return newSet; });
-    setTranscriptProgress(prev => { const newMap = new Map(prev); newMap.set(episode.id, 0); return newMap; });
+    setTranscribing(prev => {
+      const newSet = new Set(prev);
+      newSet.add(episode.id);
+      return newSet;
+    });
+    setTranscriptProgress(prev => {
+      const newMap = new Map(prev);
+      newMap.set(episode.id, 0);
+      return newMap;
+    });
     
     // 更新集數狀態
     setEpisodes(prev => prev.map(ep => 
@@ -70,15 +78,27 @@ function App() {
 
     try {
       // 1. 下載音檔
-      setTranscriptProgress(prev => { const newMap = new Map(prev); newMap.set(episode.id, 20); return newMap; });
+      setTranscriptProgress(prev => {
+        const newMap = new Map(prev);
+        newMap.set(episode.id, 20);
+        return newMap;
+      });
       const audioBlob = await downloadAudioForTranscription(episode.audioUrl);
       
       // 2. 上傳到後端進行轉錄
-      setTranscriptProgress(prev => { const newMap = new Map(prev); newMap.set(episode.id, 50); return newMap; });
+      setTranscriptProgress(prev => {
+        const newMap = new Map(prev);
+        newMap.set(episode.id, 50);
+        return newMap;
+      });
       const transcript = await uploadForTranscription(audioBlob, episode);
       
       // 3. 更新狀態
-      setTranscriptProgress(prev => { const newMap = new Map(prev); newMap.set(episode.id, 100); return newMap; });
+      setTranscriptProgress(prev => {
+        const newMap = new Map(prev);
+        newMap.set(episode.id, 100);
+        return newMap;
+      });
       setEpisodes(prev => prev.map(ep => 
         ep.id === episode.id 
           ? { 
@@ -471,35 +491,34 @@ function App() {
     switch (episode.transcriptStatus) {
       case 'processing':
         return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{ 
-              width: '16px', 
-              height: '16px', 
-              border: '2px solid #f3f3f3',
-              borderTop: '2px solid #007bff',
-              borderRadius: '50%',
-              animation: 'spin 1s linear infinite'
-            }}></div>
-            <span style={{ fontSize: '12px', color: '#666' }}>
-              轉錄中 {progress}%
+          <div className="transcript-progress">
+            <div className="spinner"></div>
+            <div className="transcript-progress-bar">
+              <div 
+                className="transcript-progress-fill" 
+                style={{ width: `${progress}%` }}
+              ></div>
+            </div>
+            <span className="transcript-status processing">
+              {progress}%
             </span>
           </div>
         );
       case 'completed':
         return (
-          <span style={{ color: '#28a745', fontSize: '12px' }}>
+          <span className="transcript-status completed">
             ✅ 已完成
           </span>
         );
       case 'error':
         return (
-          <span style={{ color: '#dc3545', fontSize: '12px' }}>
+          <span className="transcript-status error">
             ❌ 失敗
           </span>
         );
       default:
         return (
-          <span style={{ color: '#6c757d', fontSize: '12px' }}>
+          <span className="transcript-status none">
             📝 未轉錄
           </span>
         );
@@ -528,7 +547,8 @@ function App() {
             </button>
           </div>
           <p className="hint">
-            💡 提示：工具會自動嘗試多種方法下載音檔和生成逐字稿
+            💡 提示：工具會自動嘗試多種方法下載音檔和生成逐字稿<br/>
+            🎤 轉錄功能：將音檔轉換成文字逐字稿，方便閱讀和搜尋內容
           </p>
         </div>
 
@@ -559,11 +579,7 @@ function App() {
                 <button
                   onClick={handleBatchTranscribe}
                   disabled={selected.length === 0}
-                  className="transcribe-button"
-                  style={{ 
-                    backgroundColor: '#28a745',
-                    marginLeft: '10px'
-                  }}
+                  className="transcribe-button transcribe-button-override"
                 >
                   🎤 批量轉錄 ({selected.length})
                 </button>
@@ -610,45 +626,32 @@ function App() {
                       <td>{episode.duration}</td>
                       <td className="audio-url">
                         {episode.audioUrl ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div className="audio-link-container">
                             <a 
                               href={episode.audioUrl} 
                               target="_blank" 
                               rel="noopener noreferrer"
-                              style={{ 
-                                color: '#007bff',
-                                textDecoration: 'none',
-                                fontSize: '12px',
-                                maxWidth: '200px',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap'
-                              }}
+                              className="audio-link"
                             >
                               🔗 音檔連結
                             </a>
                             <button
                               onClick={() => handleCopyLink(episode.audioUrl, episode.title)}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                cursor: 'pointer',
-                                fontSize: '12px'
-                              }}
+                              className="copy-button"
                               title="複製連結"
                             >
                               📋
                             </button>
                           </div>
                         ) : (
-                          <span style={{ color: '#999', fontSize: '12px' }}>無連結</span>
+                          <span className="no-link">無連結</span>
                         )}
                       </td>
                       <td>
                         {renderTranscriptStatus(episode)}
                       </td>
                       <td>
-                        <div style={{ display: 'flex', gap: '4px' }}>
+                        <div className="action-buttons">
                           <button
                             onClick={() => handleTranscribe(episode)}
                             disabled={
@@ -656,15 +659,9 @@ function App() {
                               transcribing.has(episode.id) ||
                               episode.transcriptStatus === 'processing'
                             }
-                            style={{
-                              padding: '4px 8px',
-                              fontSize: '12px',
-                              backgroundColor: episode.transcriptStatus === 'completed' ? '#6c757d' : '#007bff',
-                              color: 'white',
-                              border: 'none',
-                              borderRadius: '4px',
-                              cursor: transcribing.has(episode.id) ? 'not-allowed' : 'pointer'
-                            }}
+                            className={`action-button transcribe-action-button ${
+                              episode.transcriptStatus === 'completed' ? 'completed' : ''
+                            }`}
                             title={
                               episode.transcriptStatus === 'completed' 
                                 ? '重新轉錄' 
@@ -677,15 +674,7 @@ function App() {
                           {episode.transcriptStatus === 'completed' && (
                             <button
                               onClick={() => handleDownloadTranscript(episode)}
-                              style={{
-                                padding: '4px 8px',
-                                fontSize: '12px',
-                                backgroundColor: '#28a745',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: 'pointer'
-                              }}
+                              className="action-button download-transcript-button"
                               title="下載逐字稿"
                             >
                               📄
@@ -701,7 +690,6 @@ function App() {
           </div>
         )}
       </main>
-
     </div>
   );
 }

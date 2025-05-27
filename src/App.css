@@ -1,38 +1,374 @@
 .App {
   text-align: center;
-}
-
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
+  min-height: 100vh;
+  background-color: #f5f5f5;
 }
 
 .App-header {
   background-color: #282c34;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
+  padding: 20px;
   color: white;
 }
 
-.App-link {
-  color: #61dafb;
+.App-header h1 {
+  margin: 0 0 10px 0;
+  font-size: 2rem;
 }
 
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
+.App-header p {
+  margin: 0;
+  font-size: 1.1rem;
+  opacity: 0.9;
+}
+
+.main-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.input-section {
+  background: white;
+  padding: 30px;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  margin-bottom: 30px;
+}
+
+.input-group {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.rss-input {
+  flex: 1;
+  padding: 12px;
+  border: 2px solid #ddd;
+  border-radius: 5px;
+  font-size: 16px;
+}
+
+.rss-input:focus {
+  outline: none;
+  border-color: #007bff;
+}
+
+.load-button {
+  padding: 12px 24px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.load-button:hover {
+  background-color: #0056b3;
+}
+
+.hint {
+  color: #666;
+  font-size: 14px;
+  margin: 0;
+}
+
+.episodes-section {
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  overflow: hidden;
+}
+
+.controls {
+  padding: 20px;
+  background-color: #f8f9fa;
+  border-bottom: 1px solid #dee2e6;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+.selection-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.action-controls {
+  display: flex;
+  gap: 10px;
+}
+
+.select-button {
+  padding: 8px 16px;
+  background-color: #6c757d;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.select-button:hover {
+  background-color: #5a6268;
+}
+
+.selected-count {
+  font-size: 14px;
+  color: #666;
+  font-weight: bold;
+}
+
+.download-button {
+  padding: 10px 20px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.download-button:hover {
+  background-color: #0056b3;
+}
+
+.download-button:disabled {
+  background-color: #6c757d;
+  cursor: not-allowed;
+}
+
+.transcribe-button {
+  background-color: #28a745;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.transcribe-button:hover {
+  background-color: #218838;
+}
+
+.transcribe-button:disabled {
+  background-color: #6c757d;
+  cursor: not-allowed;
+}
+
+.progress-section {
+  padding: 20px;
+  background-color: #f8f9fa;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 20px;
+  background-color: #e9ecef;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: #007bff;
+  transition: width 0.3s ease;
+}
+
+.episodes-table {
+  overflow-x: auto;
+}
+
+.episodes-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.episodes-table th,
+.episodes-table td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.episodes-table th {
+  background-color: #f8f9fa;
+  font-weight: bold;
+  color: #495057;
+}
+
+.episodes-table tr:hover {
+  background-color: #f8f9fa;
+}
+
+.episode-title {
+  font-weight: bold;
+  color: #333;
+  max-width: 300px;
+}
+
+.audio-url {
+  max-width: 200px;
+}
+
+.transcript-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.transcript-progress-bar {
+  width: 100px;
+  height: 8px;
+  background-color: #e9ecef;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.transcript-progress-fill {
+  height: 100%;
+  background-color: #28a745;
+  transition: width 0.3s ease;
+}
+
+.transcript-status {
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.transcript-status.processing {
+  color: #007bff;
+}
+
+.transcript-status.completed {
+  color: #28a745;
+}
+
+.transcript-status.error {
+  color: #dc3545;
+}
+
+.transcript-status.none {
+  color: #6c757d;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #f3f3f3;
+  border-top: 2px solid #007bff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@media (max-width: 768px) {
+  .input-group {
+    flex-direction: column;
   }
-  to {
-    transform: rotate(360deg);
+  
+  .controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .selection-controls,
+  .action-controls {
+    justify-content: center;
+  }
+  
+  .episodes-table {
+    font-size: 14px;
+  }
+  
+  .episodes-table th,
+  .episodes-table td {
+    padding: 8px;
   }
 }
+
+/* 音檔連結樣式 */
+.audio-link-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audio-link {
+  color: #007bff;
+  text-decoration: none;
+  font-size: 12px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copy-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.copy-button:hover {
+  background-color: #f8f9fa;
+}
+
+.no-link {
+  color: #999;
+  font-size: 12px;
+}
+
+/* 操作按鈕容器 */
+.action-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.action-button {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.action-button:disabled {
+  cursor: not-allowed;
+}
+
+.transcribe-action-button {
+  background-color: #007bff;
+}
+
+.transcribe-action-button.completed {
+  background-color: #6c757d;
+}
+
+.download-transcript-button {
+  background-color: #28a745;
+}
+
+/* 轉錄按鈕樣式覆蓋 */
+.transcribe-button-override {
+  background-color: #28a745 !important;
+  margin-left: 10px;
+} 
