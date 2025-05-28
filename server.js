@@ -1,6 +1,6 @@
 const express = require('express');
 const path = require('path');
-const { formidable } = require('formidable');
+const formidable = require('formidable');
 const fs = require('fs');
 const https = require('https');
 const http = require('http');
