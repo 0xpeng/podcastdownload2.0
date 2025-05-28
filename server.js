@@ -10,10 +10,31 @@ const OpenAI = require('openai');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 初始化 OpenAI 客戶端
+// 初始化 OpenAI 客戶端，添加代理支援以解決地區限制
 let openai = null;
 if (process.env.OPENAI_API_KEY) {
-  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  try {
+    // 嘗試使用代理列表繞過地區限制
+    const proxyList = [
+      'https://api.openai-proxy.com',
+      'https://openai.justsong.cn', 
+      'https://api.chatanywhere.com.cn',
+      'https://api.openai-sb.com'
+    ];
+    
+    // 使用環境變數指定的代理，或使用默認代理
+    const baseURL = process.env.OPENAI_PROXY || proxyList[0];
+    
+    openai = new OpenAI({ 
+      apiKey: process.env.OPENAI_API_KEY,
+      baseURL: baseURL
+    });
+    
+    console.log(`OpenAI 客戶端初始化成功，使用代理: ${baseURL}`);
+  } catch (error) {
+    console.warn('OpenAI 代理初始化失敗，嘗試直接連接:', error);
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
 } else {
   console.warn('Warning: OPENAI_API_KEY is not set. Transcription API will be disabled.');
 }
@@ -50,8 +71,13 @@ app.all('/api/test', (req, res) => {
       platform: process.platform,
       env: {
         OPENAI_API_KEY: process.env.OPENAI_API_KEY ? '已設置' : '未設置',
+        OPENAI_PROXY: process.env.OPENAI_PROXY || '使用默認代理',
         PORT: process.env.PORT || '未設置'
       }
+    },
+    openai: {
+      initialized: openai !== null,
+      baseURL: openai ? openai.baseURL : '未初始化'
     }
   });
 });
