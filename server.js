@@ -34,7 +34,7 @@ if (process.env.OPENAI_API_KEY) {
     });
     
     console.log(`OpenAI 客戶端初始化成功，使用代理: ${baseURL}`);
-    console.log(`API Key 前綴: ${process.env.OPENAI_API_KEY.substring(0, 7)}...`);
+    console.log(`API Key 前綴: ${process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) + '...' : '未設置'}`);
   } catch (error) {
     console.warn('OpenAI 代理初始化失敗，嘗試直接連接:', error);
     openai = new OpenAI({ 
@@ -64,22 +64,16 @@ app.use((req, res, next) => {
 
 // 測試 API
 app.all('/api/test', (req, res) => {
-  console.log(`=== 測試 API 請求 ===`);
-  console.log(`方法: ${req.method}`);
-  console.log(`URL: ${req.url}`);
+  console.log(`測試 API: ${req.method} ${req.url}`);
   
   res.json({
     success: true,
     message: 'API 測試成功！',
-    method: req.method,
-    url: req.url,
     timestamp: new Date().toISOString(),
     environment: {
       nodeVersion: process.version,
-      platform: process.platform,
       env: {
         OPENAI_API_KEY: process.env.OPENAI_API_KEY ? '已設置' : '未設置',
-        OPENAI_PROXY: process.env.OPENAI_PROXY || '使用默認代理',
         PORT: process.env.PORT || '未設置'
       }
     },
@@ -141,24 +135,18 @@ app.post('/api/download', (req, res) => {
 
 // 轉錄 API
 app.post('/api/transcribe', (req, res) => {
-  console.log(`=== API 請求開始 ===`);
-  console.log(`方法: ${req.method}`);
-  console.log(`URL: ${req.url}`);
+  console.log(`轉錄 API 請求開始`);
   
   const form = new formidable.IncomingForm({
     maxFileSize: 30 * 1024 * 1024, // 30MB 上傳上限，稍高於 OpenAI 25MB 限制
     keepExtensions: true,
   });
-
-  console.log('開始解析表單數據...');
   
   form.parse(req, (err, fields, files) => {
     if (err) {
       console.error('表單解析錯誤:', err);
       return res.status(400).json({ error: `表單解析失敗: ${err.message}` });
     }
-
-    console.log('表單解析完成');
     
     const audioFile = files.audio?.[0];
     const title = fields.title?.[0] || 'Unknown';
@@ -169,9 +157,7 @@ app.post('/api/transcribe', (req, res) => {
       return res.status(400).json({ error: '沒有找到音檔' });
     }
 
-    console.log(`開始轉錄: ${title} (${episodeId})`);
-    console.log(`檔案路徑: ${audioFile.filepath}`);
-    console.log(`檔案大小: ${(audioFile.size / 1024 / 1024).toFixed(2)}MB`);
+    console.log(`開始轉錄: ${title} (${(audioFile.size / 1024 / 1024).toFixed(2)}MB)`);
 
     // OpenAI Whisper 限制為 25MB，超出直接回傳 413
     const OPENAI_LIMIT = 25 * 1024 * 1024;
@@ -190,8 +176,7 @@ app.post('/api/transcribe', (req, res) => {
       });
     }
 
-    console.log('開始調用 OpenAI Whisper API...');
-    console.log(`使用的 baseURL: ${openai.baseURL}`);
+    console.log(`調用 Whisper API: ${openai.baseURL}`);
     const startTime = Date.now();
     
     // 使用 OpenAI Whisper API 進行轉錄
@@ -318,8 +303,8 @@ function downloadAudio(url, callback, maxRedirects = 5) {
         chunks.push(chunk);
         totalLength += chunk.length;
         
-        // 每 1MB 輸出一次進度
-        if (totalLength % (1024 * 1024) < chunk.length) {
+        // 減少日誌頻率：每 5MB 輸出一次進度
+        if (totalLength % (5 * 1024 * 1024) < chunk.length) {
           console.log(`已下載: ${(totalLength / 1024 / 1024).toFixed(2)}MB`);
         }
       });

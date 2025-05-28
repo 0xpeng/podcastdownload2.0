@@ -17,8 +17,8 @@ RUN npm run build
 # 清理開發依賴，只保留生產依賴
 RUN npm ci --only=production && npm cache clean --force
 
-# 暴露端口
-EXPOSE 3000
+# 暴露端口（使用環境變數）
+EXPOSE $PORT
 
 # 啟動服務器
 CMD ["node", "server.js"] 
