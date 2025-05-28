@@ -70,35 +70,27 @@ app.post('/api/download', (req, res) => {
   downloadAudio(audioUrl, (error, audioBuffer) => {
     if (error) {
       console.error('音檔下載錯誤:', error);
-      if (!res.headersSent) {
-        return res.status(500).json({ 
-          error: `音檔下載失敗: ${error.message}` 
-        });
-      }
-      return;
+      return res.status(500).json({ 
+        error: `音檔下載失敗: ${error.message}` 
+      });
     }
 
     console.log(`音檔下載完成，大小: ${(audioBuffer.length / 1024 / 1024).toFixed(2)}MB`);
 
     // 檢查下載的內容是否為有效音檔
     if (audioBuffer.length < 1024) {
-      if (!res.headersSent) {
-        return res.status(500).json({ 
-          error: '下載的檔案太小，可能不是有效的音檔' 
-        });
-      }
-      return;
+      return res.status(500).json({ 
+        error: '下載的檔案太小，可能不是有效的音檔' 
+      });
     }
 
-    if (!res.headersSent) {
-      // 設置響應 headers
-      res.setHeader('Content-Type', 'audio/mpeg');
-      res.setHeader('Content-Length', audioBuffer.length);
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(title || 'audio')}.mp3"`);
-      
-      // 返回音檔數據
-      res.send(audioBuffer);
-    }
+    // 設置響應 headers
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', audioBuffer.length);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(title || 'audio')}.mp3"`);
+    
+    // 返回音檔數據
+    res.send(audioBuffer);
   });
 });
 
@@ -108,7 +100,7 @@ app.post('/api/transcribe', (req, res) => {
   console.log(`方法: ${req.method}`);
   console.log(`URL: ${req.url}`);
   
-  const form = new formidable.IncomingForm({
+  const form = formidable({
     maxFileSize: 25 * 1024 * 1024, // 25MB 限制
     keepExtensions: true,
   });
@@ -243,7 +235,7 @@ function downloadAudio(url, callback, maxRedirects = 5) {
         'Accept-Encoding': 'identity',
         'Connection': 'keep-alive'
       },
-      timeout: 120000 // 增加到 2 分鐘
+      timeout: 30000
     }, (response) => {
       console.log(`響應狀態: ${response.statusCode}`);
       
