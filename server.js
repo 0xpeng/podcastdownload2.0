@@ -10,21 +10,12 @@ const OpenAI = require('openai');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 初始化 OpenAI 客戶端，添加代理支援以解決地區限制
+// 初始化 OpenAI 客戶端，強制使用官方端點避免代理問題
 let openai = null;
 if (process.env.OPENAI_API_KEY) {
   try {
-    // 更新代理列表，使用更可靠的代理服務
-    const proxyList = [
-      'https://api.chatanywhere.com.cn/v1',     // 國內穩定代理
-      'https://openai.justsong.cn/v1',          // 備用代理 1
-      'https://api.openai-sb.com/v1',           // 備用代理 2
-      'https://api.openai-proxy.org/v1',        // 備用代理 3
-      'https://api.openai.com/v1'               // 官方 API（最後嘗試）
-    ];
-    
-    // 使用環境變數指定的代理，或使用默認代理
-    const baseURL = process.env.OPENAI_PROXY || proxyList[0];
+    // 強制使用官方 OpenAI API 端點，避免代理認證問題
+    const baseURL = 'https://api.openai.com/v1';
     
     openai = new OpenAI({ 
       apiKey: process.env.OPENAI_API_KEY,
@@ -33,12 +24,13 @@ if (process.env.OPENAI_API_KEY) {
       maxRetries: 2   // 最多重試 2 次
     });
     
-    console.log(`OpenAI 客戶端初始化成功，使用代理: ${baseURL}`);
-    console.log(`API Key 前綴: ${process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) + '...' : '未設置'}`);
-    console.log(`API Key 長度: ${process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.length : 0}`);
-    console.log(`API Key 完整格式檢查: ${process.env.OPENAI_API_KEY ? (process.env.OPENAI_API_KEY.startsWith('sk-proj-') ? '✅ 正確' : '❌ 格式錯誤') : '❌ 未設置'}`);
+    console.log(`🔧 OpenAI 客戶端初始化成功，使用官方端點: ${baseURL}`);
+    console.log(`🔑 API Key 前綴: ${process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) + '...' : '未設置'}`);
+    console.log(`📏 API Key 長度: ${process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.length : 0}`);
+    console.log(`✅ API Key 格式檢查: ${process.env.OPENAI_API_KEY ? (process.env.OPENAI_API_KEY.startsWith('sk-proj-') ? '✅ 正確' : '❌ 格式錯誤') : '❌ 未設置'}`);
+    console.log(`🚀 準備就緒，避免了所有代理認證問題！`);
   } catch (error) {
-    console.warn('OpenAI 代理初始化失敗，嘗試直接連接:', error);
+    console.warn('OpenAI 初始化失敗:', error);
     openai = new OpenAI({ 
       apiKey: process.env.OPENAI_API_KEY,
       timeout: 60000,
