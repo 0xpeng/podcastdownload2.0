@@ -11,9 +11,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // 初始化 OpenAI 客戶端
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+let openai = null;
+if (process.env.OPENAI_API_KEY) {
+  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+} else {
+  console.warn('Warning: OPENAI_API_KEY is not set. Transcription API will be disabled.');
+}
 
 // 設置 body parser
 app.use(express.json());
