@@ -40,7 +40,7 @@ const mockEpisodes: Episode[] = [
 ];
 
 function App() {
-  const [rssUrl, setRssUrl] = useState('');
+  const [rssUrl, setRssUrl] = useState('https://feeds.soundon.fm/podcasts/066b9fb0-0c9a-417f-a97b-57d04bcc6aca.xml');
   const [episodes, setEpisodes] = useState<Episode[]>(mockEpisodes);
   const [selected, setSelected] = useState<string[]>([]);
   const [downloading, setDownloading] = useState(false);
