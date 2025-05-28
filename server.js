@@ -260,14 +260,16 @@ function downloadAudio(url, callback, maxRedirects = 5) {
       console.log(`響應狀態: ${response.statusCode}`);
       
       // 處理重定向
-      let redirectUrl = response.headers.location;
-      // 支援相對位置重新導向
-      if (redirectUrl && !/^https?:\/\//i.test(redirectUrl)) {
-        redirectUrl = new URL(redirectUrl, currentUrl).toString();
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        let redirectUrl = response.headers.location;
+        // 支援相對位置重新導向
+        if (redirectUrl && !/^https?:\/\//i.test(redirectUrl)) {
+          redirectUrl = new URL(redirectUrl, currentUrl).toString();
+        }
+        console.log(`重定向到: ${redirectUrl}`);
+        downloadWithRedirect(redirectUrl, redirectCount + 1);
+        return;
       }
-      console.log(`重定向到: ${redirectUrl}`);
-      downloadWithRedirect(redirectUrl, redirectCount + 1);
-      return;
       
       if (response.statusCode !== 200) {
         callback(new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`));
