@@ -5,26 +5,7 @@
   "deploy": {
     "outputDirectory": "build"
   },
-  "functions": {
-    "api/transcribe.js": {
-      "runtime": "nodejs18.x",
-      "timeout": 300,
-      "memory": 1024
-    },
-    "api/download.js": {
-      "runtime": "nodejs18.x",
-      "timeout": 300,
-      "memory": 1024
-    }
-  },
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/api/$1"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/index.html"
-    }
-  ]
+  "env": {
+    "NODE_ENV": "production"
+  }
 } 

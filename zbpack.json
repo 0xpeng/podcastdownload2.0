@@ -1,12 +1,6 @@
 {
   "build_command": "npm run build",
   "install_command": "npm install",
-  "output_dir": "build",
-  "functions": {
-    "api/**/*.js": {
-      "runtime": "nodejs18.x",
-      "maxDuration": 300,
-      "memory": 1024
-    }
-  }
+  "start_command": "npm start",
+  "output_dir": "build"
 } 
