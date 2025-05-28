@@ -14,12 +14,13 @@ const PORT = process.env.PORT || 3000;
 let openai = null;
 if (process.env.OPENAI_API_KEY) {
   try {
-    // 嘗試使用代理列表繞過地區限制
+    // 更新代理列表，使用更可靠的代理服務
     const proxyList = [
-      'https://api.openai-proxy.com',
-      'https://openai.justsong.cn', 
-      'https://api.chatanywhere.com.cn',
-      'https://api.openai-sb.com'
+      'https://api.chatanywhere.com.cn/v1',     // 國內穩定代理
+      'https://openai.justsong.cn/v1',          // 備用代理 1
+      'https://api.openai-sb.com/v1',           // 備用代理 2
+      'https://api.openai-proxy.org/v1',        // 備用代理 3
+      'https://api.openai.com/v1'               // 官方 API（最後嘗試）
     ];
     
     // 使用環境變數指定的代理，或使用默認代理
@@ -27,13 +28,20 @@ if (process.env.OPENAI_API_KEY) {
     
     openai = new OpenAI({ 
       apiKey: process.env.OPENAI_API_KEY,
-      baseURL: baseURL
+      baseURL: baseURL,
+      timeout: 60000, // 60 秒超時
+      maxRetries: 2   // 最多重試 2 次
     });
     
     console.log(`OpenAI 客戶端初始化成功，使用代理: ${baseURL}`);
+    console.log(`API Key 前綴: ${process.env.OPENAI_API_KEY.substring(0, 7)}...`);
   } catch (error) {
     console.warn('OpenAI 代理初始化失敗，嘗試直接連接:', error);
-    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    openai = new OpenAI({ 
+      apiKey: process.env.OPENAI_API_KEY,
+      timeout: 60000,
+      maxRetries: 2
+    });
   }
 } else {
   console.warn('Warning: OPENAI_API_KEY is not set. Transcription API will be disabled.');
@@ -183,6 +191,7 @@ app.post('/api/transcribe', (req, res) => {
     }
 
     console.log('開始調用 OpenAI Whisper API...');
+    console.log(`使用的 baseURL: ${openai.baseURL}`);
     const startTime = Date.now();
     
     // 使用 OpenAI Whisper API 進行轉錄
