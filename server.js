@@ -112,7 +112,7 @@ app.post('/api/transcribe', (req, res) => {
   console.log(`URL: ${req.url}`);
   
   const form = new formidable.IncomingForm({
-    maxFileSize: 25 * 1024 * 1024, // 25MB 限制
+    maxFileSize: 30 * 1024 * 1024, // 30MB 上傳上限，稍高於 OpenAI 25MB 限制
     keepExtensions: true,
   });
 
@@ -138,6 +138,15 @@ app.post('/api/transcribe', (req, res) => {
     console.log(`開始轉錄: ${title} (${episodeId})`);
     console.log(`檔案路徑: ${audioFile.filepath}`);
     console.log(`檔案大小: ${(audioFile.size / 1024 / 1024).toFixed(2)}MB`);
+
+    // OpenAI Whisper 限制為 25MB，超出直接回傳 413
+    const OPENAI_LIMIT = 25 * 1024 * 1024;
+    if (audioFile.size > OPENAI_LIMIT) {
+      console.warn('音檔大小超過 25MB，無法送往 OpenAI Whisper');
+      return res.status(413).json({
+        error: '音檔超過 25MB 限制，請裁剪或壓縮後再試'
+      });
+    }
 
     // 檢查 OpenAI API 金鑰
     if (!process.env.OPENAI_API_KEY) {
@@ -251,12 +260,14 @@ function downloadAudio(url, callback, maxRedirects = 5) {
       console.log(`響應狀態: ${response.statusCode}`);
       
       // 處理重定向
-      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-        const redirectUrl = response.headers.location;
-        console.log(`重定向到: ${redirectUrl}`);
-        downloadWithRedirect(redirectUrl, redirectCount + 1);
-        return;
+      let redirectUrl = response.headers.location;
+      // 支援相對位置重新導向
+      if (redirectUrl && !/^https?:\/\//i.test(redirectUrl)) {
+        redirectUrl = new URL(redirectUrl, currentUrl).toString();
       }
+      console.log(`重定向到: ${redirectUrl}`);
+      downloadWithRedirect(redirectUrl, redirectCount + 1);
+      return;
       
       if (response.statusCode !== 200) {
         callback(new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`));
