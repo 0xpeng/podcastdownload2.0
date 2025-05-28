@@ -2,8 +2,8 @@
   "build": {
     "commands": ["npm install", "npm run build"]
   },
-  "deploy": {
-    "outputDirectory": "build"
+  "run": {
+    "command": "node server.js"
   },
   "env": {
     "NODE_ENV": "production"

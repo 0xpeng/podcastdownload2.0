@@ -1,6 +1,6 @@
 {
-  "build_command": "npm run build",
-  "install_command": "npm install",
-  "start_command": "npm start",
-  "output_dir": "build"
+  "build_command": "npm install && npm run build",
+  "start_command": "node server.js",
+  "node_version": "18",
+  "serverless": false
 } 
