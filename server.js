@@ -35,6 +35,8 @@ if (process.env.OPENAI_API_KEY) {
     
     console.log(`OpenAI 客戶端初始化成功，使用代理: ${baseURL}`);
     console.log(`API Key 前綴: ${process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) + '...' : '未設置'}`);
+    console.log(`API Key 長度: ${process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.length : 0}`);
+    console.log(`API Key 完整格式檢查: ${process.env.OPENAI_API_KEY ? (process.env.OPENAI_API_KEY.startsWith('sk-proj-') ? '✅ 正確' : '❌ 格式錯誤') : '❌ 未設置'}`);
   } catch (error) {
     console.warn('OpenAI 代理初始化失敗，嘗試直接連接:', error);
     openai = new OpenAI({ 
