@@ -6,7 +6,17 @@ const https = require('https');
 const http = require('http');
 const { URL } = require('url');
 const OpenAI = require('openai');
-const ffmpeg = require('fluent-ffmpeg'); let ffmpegAvailable = true;
+const ffmpeg = require('fluent-ffmpeg'); 
+
+// 導入新的轉錄服務模塊
+const {
+  TranscriptionFormatter,
+  TranscriptionOptimizer,
+  SpeakerDiarization,
+  TranscriptionProcessor
+} = require('./transcription-service');
+
+let ffmpegAvailable = true;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -75,6 +85,12 @@ app.all('/api/test', (req, res) => {
     openai: {
       initialized: openai !== null,
       baseURL: openai ? openai.baseURL : '未初始化'
+    },
+    features: {
+      enhancedTranscription: true,
+      multipleFormats: true,
+      speakerDiarization: 'experimental',
+      audioProcessing: ffmpegAvailable
     }
   });
 });
@@ -128,9 +144,9 @@ app.post('/api/download', (req, res) => {
   });
 });
 
-// 轉錄 API
+// 增強版轉錄 API
 app.post('/api/transcribe', (req, res) => {
-  console.log(`轉錄 API 請求開始`);
+  console.log(`增強版轉錄 API 請求開始`);
   
   const form = new formidable.IncomingForm({
     maxFileSize: 30 * 1024 * 1024, // 30MB 上傳上限，稍高於 OpenAI 25MB 限制
@@ -146,13 +162,19 @@ app.post('/api/transcribe', (req, res) => {
     const audioFile = files.audio?.[0];
     const title = fields.title?.[0] || 'Unknown';
     const episodeId = fields.episodeId?.[0] || 'unknown';
+    const outputFormats = fields.outputFormats?.[0]?.split(',') || ['txt'];
+    const contentType = fields.contentType?.[0] || 'podcast';
+    const enableSpeakerDiarization = fields.enableSpeakerDiarization?.[0] === 'true';
 
     if (!audioFile) {
       console.log('沒有找到音檔');
       return res.status(400).json({ error: '沒有找到音檔' });
     }
 
-    console.log(`開始轉錄: ${title} (${(audioFile.size / 1024 / 1024).toFixed(2)}MB)`);
+    console.log(`開始增強轉錄: ${title} (${(audioFile.size / 1024 / 1024).toFixed(2)}MB)`);
+    console.log(`輸出格式: ${outputFormats.join(', ')}`);
+    console.log(`內容類型: ${contentType}`);
+    console.log(`說話者分離: ${enableSpeakerDiarization ? '啟用' : '停用'}`);
 
     // OpenAI Whisper 限制為 25MB，超出則自動處理
     const OPENAI_LIMIT = 25 * 1024 * 1024;
@@ -163,8 +185,26 @@ app.post('/api/transcribe', (req, res) => {
       console.log(`音檔大小 ${fileSizeMB}MB 超過 25MB，啟動自動處理...`);
       
       try {
-        // 使用音檔處理功能（壓縮/分割）
-        try { processedAudio = await processLargeAudio(audioFile, title); } catch (ffmpegError) { if (ffmpegError.message.includes("ffmpeg") || ffmpegError.message.includes("ENOENT")) { console.error("FFmpeg 不可用:", ffmpegError.message); return res.status(413).json({ error: "音檔大小超過限制，且伺服器音檔處理功能不可用", message: "請手動壓縮音檔", suggestions: ["使用音訊編輯軟體壓縮至25MB以下", "降低音質至128kbps或更低", "分割成較短片段", "轉換為MP3格式"], currentSize: fileSizeMB + "MB", maxSize: "25MB" }); } throw ffmpegError; }
+        try { 
+          processedAudio = await processLargeAudio(audioFile, title); 
+        } catch (ffmpegError) { 
+          if (ffmpegError.message.includes("ffmpeg") || ffmpegError.message.includes("ENOENT")) { 
+            console.error("FFmpeg 不可用:", ffmpegError.message); 
+            return res.status(413).json({ 
+              error: "音檔大小超過限制，且伺服器音檔處理功能不可用", 
+              message: "請手動壓縮音檔", 
+              suggestions: [
+                "使用音訊編輯軟體壓縮至25MB以下", 
+                "降低音質至128kbps或更低", 
+                "分割成較短片段", 
+                "轉換為MP3格式"
+              ], 
+              currentSize: fileSizeMB + "MB", 
+              maxSize: "25MB" 
+            }); 
+          } 
+          throw ffmpegError; 
+        }
         console.log(`音檔處理完成，類型: ${processedAudio.type}`);
       } catch (error) {
         console.error('音檔處理失敗:', error);
@@ -200,6 +240,10 @@ app.post('/api/transcribe', (req, res) => {
     try {
       let finalTranscription;
       
+      // 生成優化的提示詞
+      const optimizedPrompt = TranscriptionOptimizer.generateOptimizedPrompt('zh', contentType);
+      console.log(`使用優化提示詞: ${optimizedPrompt}`);
+      
       if (processedAudio.type === 'single') {
         // 單一檔案轉錄
         console.log('開始轉錄單一音檔...');
@@ -209,7 +253,7 @@ app.post('/api/transcribe', (req, res) => {
           language: 'zh',
           response_format: 'verbose_json',
           timestamp_granularities: ['word'],
-          prompt: '請使用繁體中文進行轉錄。'
+          prompt: optimizedPrompt
         });
         
         finalTranscription = transcription;
@@ -229,7 +273,7 @@ app.post('/api/transcribe', (req, res) => {
             language: 'zh',
             response_format: 'verbose_json',
             timestamp_granularities: ['word'],
-            prompt: '請使用繁體中文進行轉錄。'
+            prompt: optimizedPrompt
           });
           
           transcriptions.push(transcription);
@@ -247,6 +291,21 @@ app.post('/api/transcribe', (req, res) => {
       
       const endTime = Date.now();
       console.log(`OpenAI API 調用成功，耗時: ${(endTime - startTime) / 1000}秒`);
+
+      // 處理說話者分離
+      if (enableSpeakerDiarization && finalTranscription.segments) {
+        console.log('開始處理說話者分離...');
+        finalTranscription.segments = await SpeakerDiarization.simulateSpeakerDetection(finalTranscription.segments);
+      }
+
+      // 使用增強轉錄處理器生成多種格式
+      console.log('生成多種輸出格式...');
+      const processedResult = TranscriptionProcessor.processTranscriptionResult(finalTranscription, {
+        enableSpeakerDiarization,
+        outputFormats,
+        optimizeSegments: true,
+        contentType
+      });
 
       // 清理臨時檔案
       try {
@@ -274,29 +333,30 @@ app.post('/api/transcribe', (req, res) => {
         console.warn('清理臨時檔案失敗:', cleanupError);
       }
 
-      // 格式化逐字稿文字
-      const formattedText = finalTranscription.segments && finalTranscription.segments.length > 0
-        ? formatTranscript(finalTranscription)
-        : finalTranscription.text || '';
-
       console.log(`轉錄完成: ${title}`);
-      console.log(`文字長度: ${formattedText.length} 字元`);
+      console.log(`文字長度: ${processedResult.formats.txt?.length || 0} 字元`);
       if (processedAudio.type === 'segments') {
         console.log(`共處理 ${processedAudio.totalSegments} 個音檔片段`);
       }
 
-      // 回傳結果
+      // 回傳增強的結果
       res.json({
         success: true,
         episodeId,
         title,
-        text: formattedText,
+        text: processedResult.formats.txt || '',
         duration: finalTranscription.duration,
         language: finalTranscription.language,
         segments: finalTranscription.segments || [],
-        url: null,
-        processed: processedAudio.type !== 'single',
-        totalSegments: processedAudio.type === 'segments' ? processedAudio.totalSegments : 1
+        formats: processedResult.formats,
+        metadata: {
+          processed: processedAudio.type !== 'single',
+          totalSegments: processedAudio.type === 'segments' ? processedAudio.totalSegments : 1,
+          speakerDiarization: enableSpeakerDiarization,
+          contentType,
+          outputFormats
+        },
+        url: null
       });
       
     } catch (error) {
@@ -338,14 +398,50 @@ app.post('/api/transcribe', (req, res) => {
   });
 });
 
-// 靜態文件服務（生產環境）
-if (process.env.NODE_ENV === 'production' || !process.env.NODE_ENV) {
-  app.use(express.static(path.join(__dirname, 'build')));
+// 新增：格式轉換 API
+app.post('/api/convert-transcript', (req, res) => {
+  console.log('格式轉換 API 請求');
   
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'build', 'index.html'));
-  });
-}
+  const { transcriptData, outputFormat } = req.body;
+  
+  if (!transcriptData || !outputFormat) {
+    return res.status(400).json({ 
+      error: '缺少轉錄數據或輸出格式' 
+    });
+  }
+
+  try {
+    let convertedContent;
+    
+    switch (outputFormat) {
+      case 'srt':
+        convertedContent = TranscriptionFormatter.generateSRT(transcriptData);
+        break;
+      case 'vtt':
+        convertedContent = TranscriptionFormatter.generateVTT(transcriptData);
+        break;
+      case 'json':
+        convertedContent = TranscriptionFormatter.generateJSON(transcriptData);
+        break;
+      case 'txt':
+      default:
+        convertedContent = TranscriptionFormatter.generatePlainText(transcriptData);
+        break;
+    }
+
+    res.json({
+      success: true,
+      format: outputFormat,
+      content: convertedContent
+    });
+    
+  } catch (error) {
+    console.error('格式轉換錯誤:', error);
+    res.status(500).json({ 
+      error: `格式轉換失敗: ${error.message}` 
+    });
+  }
+});
 
 // 輔助函數
 function downloadAudio(url, callback, maxRedirects = 5) {
@@ -634,4 +730,13 @@ app.listen(PORT, () => {
   console.log(`服務器運行在端口 ${PORT}`);
   console.log(`環境: ${process.env.NODE_ENV || 'development'}`);
   console.log(`OpenAI API Key: ${process.env.OPENAI_API_KEY ? '已設置' : '未設置'}`);
-}); 
+});
+
+// 靜態文件服務（生產環境）
+if (process.env.NODE_ENV === 'production' || !process.env.NODE_ENV) {
+  app.use(express.static(path.join(__dirname, 'build')));
+  
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'build', 'index.html'));
+  });
+} 

@@ -10,6 +10,27 @@ interface Episode {
   transcriptStatus?: 'none' | 'processing' | 'completed' | 'error';
   transcriptText?: string;
   transcriptUrl?: string;
+  // 新增：增強轉錄數據
+  transcriptFormats?: {
+    txt?: string;
+    srt?: string;
+    vtt?: string;
+    json?: string;
+  };
+  transcriptMetadata?: {
+    processed?: boolean;
+    totalSegments?: number;
+    speakerDiarization?: boolean;
+    contentType?: string;
+    outputFormats?: string[];
+  };
+}
+
+// 新增：轉錄設置接口
+interface TranscriptionSettings {
+  outputFormats: string[];
+  contentType: string;
+  enableSpeakerDiarization: boolean;
 }
 
 const mockEpisodes: Episode[] = [
@@ -49,17 +70,35 @@ function App() {
   const [isPaused, setIsPaused] = useState(false);
   const [transcribing, setTranscribing] = useState<Set<string>>(new Set());
   const [transcriptProgress, setTranscriptProgress] = useState<Map<string, number>>(new Map());
+  
+  // 新增：轉錄設置狀態
+  const [transcriptionSettings, setTranscriptionSettings] = useState<TranscriptionSettings>({
+    outputFormats: ['txt'],
+    contentType: 'podcast',
+    enableSpeakerDiarization: false
+  });
+  const [showTranscriptionSettings, setShowTranscriptionSettings] = useState(false);
+  
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // 轉錄功能
+  // 新增：更新轉錄設置
+  const updateTranscriptionSettings = (key: keyof TranscriptionSettings, value: any) => {
+    setTranscriptionSettings(prev => ({
+      ...prev,
+      [key]: value
+    }));
+  };
+
+  // 增強版轉錄功能
   const handleTranscribe = async (episode: Episode) => {
     if (!episode.audioUrl) {
       alert('此集數沒有音檔連結');
       return;
     }
 
-    console.log(`開始轉錄: ${episode.title}`);
+    console.log(`開始增強轉錄: ${episode.title}`);
     console.log(`音檔 URL: ${episode.audioUrl}`);
+    console.log('轉錄設置:', transcriptionSettings);
 
     setTranscribing(prev => {
       const newSet = new Set(prev);
@@ -93,8 +132,8 @@ function App() {
       const downloadTime = Date.now() - startDownload;
       console.log(`音檔下載完成，耗時: ${downloadTime}ms，大小: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
       
-      // 2. 上傳到後端進行轉錄
-      console.log('步驟 2: 開始上傳並轉錄...');
+      // 2. 上傳到後端進行增強轉錄
+      console.log('步驟 2: 開始上傳並進行增強轉錄...');
       setTranscriptProgress(prev => {
         const newMap = new Map(prev);
         newMap.set(episode.id, 30);
@@ -102,9 +141,9 @@ function App() {
       });
       
       const startTranscribe = Date.now();
-      const transcript = await uploadForTranscription(audioBlob, episode);
+      const transcript = await uploadForEnhancedTranscription(audioBlob, episode);
       const transcribeTime = Date.now() - startTranscribe;
-      console.log(`轉錄完成，耗時: ${transcribeTime}ms`);
+      console.log(`增強轉錄完成，耗時: ${transcribeTime}ms`);
       
       // 3. 更新狀態
       setTranscriptProgress(prev => {
@@ -118,33 +157,43 @@ function App() {
               ...ep, 
               transcriptStatus: 'completed',
               transcriptText: transcript.text,
+              transcriptFormats: transcript.formats,
+              transcriptMetadata: transcript.metadata,
               transcriptUrl: transcript.url 
             }
           : ep
       ));
 
-      console.log(`"${episode.title}" 轉錄完成！`);
+      console.log(`"${episode.title}" 增強轉錄完成！`);
       
-      // 根據處理狀態顯示不同的完成訊息
+      // 顯示完成訊息
       let successMessage = `"${episode.title}" 轉錄完成！`;
-      if (transcript.processed) {
-        if (transcript.totalSegments > 1) {
-          successMessage += `\n\n✨ 音檔已自動分割為 ${transcript.totalSegments} 個片段並完成轉錄`;
+      
+      if (transcript.metadata?.processed) {
+        if (transcript.metadata.totalSegments > 1) {
+          successMessage += `\n\n✨ 音檔已自動分割為 ${transcript.metadata.totalSegments} 個片段並完成轉錄`;
         } else {
           successMessage += `\n\n🎵 音檔已自動壓縮處理`;
         }
       }
       
+      if (transcript.metadata?.speakerDiarization) {
+        successMessage += `\n\n🎙️ 已啟用說話者分離功能`;
+      }
+      
+      const formatCount = transcript.metadata?.outputFormats?.length || 1;
+      successMessage += `\n\n📄 生成了 ${formatCount} 種格式的轉錄檔`;
+      
       alert(successMessage);
     } catch (error) {
-      console.error('轉錄失敗:', error);
+      console.error('增強轉錄失敗:', error);
       setEpisodes(prev => prev.map(ep => 
         ep.id === episode.id 
           ? { ...ep, transcriptStatus: 'error' }
           : ep
       ));
       
-      // 根據錯誤類型提供不同的處理
+      // 錯誤處理
       const errorMessage = error instanceof Error ? error.message : '未知錯誤';
       
       if (errorMessage.includes('OpenAI API 額度不足')) {
@@ -172,7 +221,7 @@ function App() {
     }
   };
 
-  // 下載音檔用於轉錄
+  // 下載音檔用於轉錄（保持原有邏輯）
   const downloadAudioForTranscription = async (audioUrl: string): Promise<Blob> => {
     console.log(`使用後端代理下載音檔: ${audioUrl}`);
     
@@ -243,9 +292,9 @@ function App() {
     }
   };
 
-  // 上傳音檔到後端進行轉錄
-  const uploadForTranscription = async (audioBlob: Blob, episode: Episode) => {
-    console.log(`準備上傳音檔進行轉錄，檔案大小: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
+  // 新增：增強轉錄上傳函數
+  const uploadForEnhancedTranscription = async (audioBlob: Blob, episode: Episode) => {
+    console.log(`準備上傳音檔進行增強轉錄，檔案大小: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
     
     // 更新進度：開始上傳
     setTranscriptProgress(prev => {
@@ -258,8 +307,12 @@ function App() {
     formData.append('audio', audioBlob, `${episode.title}.mp3`);
     formData.append('title', episode.title);
     formData.append('episodeId', episode.id);
+    formData.append('outputFormats', transcriptionSettings.outputFormats.join(','));
+    formData.append('contentType', transcriptionSettings.contentType);
+    formData.append('enableSpeakerDiarization', transcriptionSettings.enableSpeakerDiarization.toString());
 
-    console.log('開始上傳音檔到轉錄服務...');
+    console.log('開始上傳音檔到增強轉錄服務...');
+    console.log('轉錄設置:', transcriptionSettings);
     
     // 更新進度：上傳中
     setTranscriptProgress(prev => {
@@ -286,28 +339,41 @@ function App() {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('轉錄 API 錯誤:', errorText);
+      console.error('增強轉錄 API 錯誤:', errorText);
       
       // 嘗試解析錯誤回應
       let errorData: any = {};
       try {
         errorData = JSON.parse(errorText);
       } catch (parseError) {
-        // 如果無法解析為 JSON，保持原始文字
         errorData = { error: errorText };
       }
       
-      // 針對常見錯誤提供友好的錯誤訊息
+      // 錯誤處理
       if (response.status === 402) {
         throw new Error('OpenAI API 額度不足，請檢查帳戶餘額');
       } else if (response.status === 400) {
         throw new Error('音檔格式不支援或檔案損壞，請嘗試使用 MP3 或 WAV 格式');
       } else {
-        if (response.status === 413 && errorData.suggestions) { const suggestionText = errorData.suggestions.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n"); const detailedMessage = [ errorData.error || "檔案大小超過限制", "", `目前檔案大小：${errorData.currentSize || "未知"}`, `最大限制：${errorData.maxSize || "25MB"}`, "", "💡 解決方案：", suggestionText ].join("\n"); throw new Error(detailedMessage); } else { throw new Error(`轉錄服務錯誤 (${response.status}): ${errorData.error || errorText}`); }
+        if (response.status === 413 && errorData.suggestions) { 
+          const suggestionText = errorData.suggestions.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n"); 
+          const detailedMessage = [ 
+            errorData.error || "檔案大小超過限制", 
+            "", 
+            `目前檔案大小：${errorData.currentSize || "未知"}`, 
+            `最大限制：${errorData.maxSize || "25MB"}`, 
+            "", 
+            "💡 解決方案：", 
+            suggestionText 
+          ].join("\n"); 
+          throw new Error(detailedMessage); 
+        } else { 
+          throw new Error(`增強轉錄服務錯誤 (${response.status}): ${errorData.error || errorText}`); 
+        }
       }
     }
 
-    console.log('✅ 轉錄服務已確認開始處理，正在等待結果...');
+    console.log('✅ 增強轉錄服務已確認開始處理，正在等待結果...');
     
     // 更新進度：轉錄進行中
     setTranscriptProgress(prev => {
@@ -317,7 +383,7 @@ function App() {
     });
 
     const result = await response.json();
-    console.log('轉錄結果接收完成:', result);
+    console.log('增強轉錄結果接收完成:', result);
     
     // 更新進度：處理結果
     setTranscriptProgress(prev => {
@@ -329,18 +395,47 @@ function App() {
     return result;
   };
 
-  // 下載逐字稿
-  const handleDownloadTranscript = (episode: Episode) => {
-    if (!episode.transcriptText) {
+  // 舊的上傳函數（保持兼容性）
+  const uploadForTranscription = async (audioBlob: Blob, episode: Episode) => {
+    return uploadForEnhancedTranscription(audioBlob, episode);
+  };
+
+  // 新增：下載特定格式的逐字稿
+  const handleDownloadTranscript = (episode: Episode, format: string = 'txt') => {
+    let content = '';
+    let extension = 'txt';
+    let mimeType = 'text/plain;charset=utf-8';
+
+    if (episode.transcriptFormats && episode.transcriptFormats[format as keyof typeof episode.transcriptFormats]) {
+      content = episode.transcriptFormats[format as keyof typeof episode.transcriptFormats] || '';
+      extension = format;
+      
+      switch (format) {
+        case 'srt':
+          mimeType = 'text/srt;charset=utf-8';
+          break;
+        case 'vtt':
+          mimeType = 'text/vtt;charset=utf-8';
+          break;
+        case 'json':
+          mimeType = 'application/json;charset=utf-8';
+          break;
+        default:
+          mimeType = 'text/plain;charset=utf-8';
+      }
+    } else if (episode.transcriptText) {
+      // 回退到基本文字格式
+      content = episode.transcriptText;
+    } else {
       alert('此集數沒有逐字稿');
       return;
     }
 
-    const blob = new Blob([episode.transcriptText], { type: 'text/plain;charset=utf-8' });
+    const blob = new Blob([content], { type: mimeType });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${episode.title}_逐字稿.txt`;
+    a.download = `${episode.title}_逐字稿.${extension}`;
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
@@ -841,8 +936,8 @@ function App() {
   return (
     <div className="App">
       <header className="App-header">
-        <h1> Podcast批量下載與轉錄工具</h1>
-        <p>輸入 RSS feed 連結，批量下載 podcast 集數並生成逐字稿</p>
+        <h1>🎙️ Podcast批量下載與增強轉錄工具</h1>
+        <p>輸入 RSS feed 連結，批量下載 podcast 集數並生成多格式逐字稿</p>
       </header>
 
       <main className="main-content">
@@ -861,8 +956,89 @@ function App() {
           </div>
           <p className="hint">
             💡 提示：工具會自動嘗試多種方法下載音檔和生成逐字稿<br/>
-            🎤 轉錄功能：將音檔轉換成文字逐字稿，方便閱讀和搜尋內容
+            🎤 增強轉錄功能：支援多種格式輸出、說話者分離、智能分段優化
           </p>
+        </div>
+
+        {/* 新增：轉錄設置面板 */}
+        <div className="transcription-settings-section">
+          <div className="settings-header">
+            <h3>🔧 轉錄設置</h3>
+            <button 
+              onClick={() => setShowTranscriptionSettings(!showTranscriptionSettings)}
+              className="toggle-settings-button"
+            >
+              {showTranscriptionSettings ? '隱藏設置' : '顯示設置'}
+            </button>
+          </div>
+          
+          {showTranscriptionSettings && (
+            <div className="settings-panel">
+              <div className="setting-group">
+                <label>📄 輸出格式：</label>
+                <div className="format-options">
+                  {['txt', 'srt', 'vtt', 'json'].map(format => (
+                    <label key={format} className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={transcriptionSettings.outputFormats.includes(format)}
+                        onChange={(e) => {
+                          const formats = e.target.checked
+                            ? [...transcriptionSettings.outputFormats, format]
+                            : transcriptionSettings.outputFormats.filter(f => f !== format);
+                          updateTranscriptionSettings('outputFormats', formats);
+                        }}
+                      />
+                      <span className="format-label">
+                        {format.toUpperCase()}
+                        {format === 'txt' && ' (純文字)'}
+                        {format === 'srt' && ' (字幕)'}
+                        {format === 'vtt' && ' (網頁字幕)'}
+                        {format === 'json' && ' (結構化數據)'}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="setting-group">
+                <label>🎯 內容類型：</label>
+                <select 
+                  value={transcriptionSettings.contentType}
+                  onChange={(e) => updateTranscriptionSettings('contentType', e.target.value)}
+                  className="content-type-select"
+                >
+                  <option value="podcast">🎙️ 播客節目</option>
+                  <option value="interview">🗣️ 訪談節目</option>
+                  <option value="lecture">📚 講座/教學</option>
+                </select>
+              </div>
+
+              <div className="setting-group">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={transcriptionSettings.enableSpeakerDiarization}
+                    onChange={(e) => updateTranscriptionSettings('enableSpeakerDiarization', e.target.checked)}
+                  />
+                  <span>🎤 啟用說話者分離 (實驗性功能)</span>
+                </label>
+                <small className="setting-description">
+                  自動識別和標記不同的說話者，適用於對話類內容
+                </small>
+              </div>
+
+              <div className="settings-summary">
+                <strong>目前設置：</strong>
+                <span>格式: {transcriptionSettings.outputFormats.join(', ').toUpperCase()}</span>
+                <span>類型: {
+                  transcriptionSettings.contentType === 'podcast' ? '播客節目' :
+                  transcriptionSettings.contentType === 'interview' ? '訪談節目' : '講座/教學'
+                }</span>
+                <span>說話者分離: {transcriptionSettings.enableSpeakerDiarization ? '啟用' : '停用'}</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {episodes.length > 0 && (
@@ -886,7 +1062,7 @@ function App() {
                   disabled={selected.length === 0 || downloading}
                   className="download-button"
                 >
-                  {downloading ? '下載中...' : `批量下載 (${selected.length})`}
+                  {downloading ? '下載中...' : `📥 批量下載 (${selected.length})`}
                 </button>
                 
                 <button
@@ -961,7 +1137,26 @@ function App() {
                         )}
                       </td>
                       <td>
-                        {renderTranscriptStatus(episode)}
+                        <div className="transcript-status-container">
+                          {renderTranscriptStatus(episode)}
+                          {episode.transcriptMetadata && (
+                            <div className="transcript-metadata">
+                              {episode.transcriptMetadata.speakerDiarization && (
+                                <span className="metadata-tag speaker-tag">🎤 說話者</span>
+                              )}
+                              {episode.transcriptMetadata.totalSegments && episode.transcriptMetadata.totalSegments > 1 && (
+                                <span className="metadata-tag segments-tag">
+                                  ✂️ {episode.transcriptMetadata.totalSegments}片段
+                                </span>
+                              )}
+                              {episode.transcriptMetadata.outputFormats && (
+                                <span className="metadata-tag formats-tag">
+                                  📄 {episode.transcriptMetadata.outputFormats.length}格式
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </td>
                       <td>
                         <div className="action-buttons">
@@ -984,7 +1179,25 @@ function App() {
                             🎤
                           </button>
                           
-                          {episode.transcriptStatus === 'completed' && (
+                          {episode.transcriptStatus === 'completed' && episode.transcriptFormats && (
+                            <div className="download-options">
+                              {Object.keys(episode.transcriptFormats).map(format => 
+                                episode.transcriptFormats![format as keyof typeof episode.transcriptFormats] && (
+                                  <button
+                                    key={format}
+                                    onClick={() => handleDownloadTranscript(episode, format)}
+                                    className={`action-button download-transcript-button format-${format}`}
+                                    title={`下載 ${format.toUpperCase()} 格式`}
+                                  >
+                                    📄 {format.toUpperCase()}
+                                  </button>
+                                )
+                              )}
+                            </div>
+                          )}
+
+                          {/* 回退選項：如果沒有多格式，使用原始下載 */}
+                          {episode.transcriptStatus === 'completed' && !episode.transcriptFormats && (
                             <button
                               onClick={() => handleDownloadTranscript(episode)}
                               className="action-button download-transcript-button"
