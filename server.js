@@ -6,6 +6,7 @@ const https = require('https');
 const http = require('http');
 const { URL } = require('url');
 const OpenAI = require('openai');
+const ffmpeg = require('fluent-ffmpeg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -136,7 +137,7 @@ app.post('/api/transcribe', (req, res) => {
     keepExtensions: true,
   });
   
-  form.parse(req, (err, fields, files) => {
+  form.parse(req, async (err, fields, files) => {
     if (err) {
       console.error('表單解析錯誤:', err);
       return res.status(400).json({ error: `表單解析失敗: ${err.message}` });
@@ -153,13 +154,36 @@ app.post('/api/transcribe', (req, res) => {
 
     console.log(`開始轉錄: ${title} (${(audioFile.size / 1024 / 1024).toFixed(2)}MB)`);
 
-    // OpenAI Whisper 限制為 25MB，超出直接回傳 413
+    // OpenAI Whisper 限制為 25MB，超出則自動處理
     const OPENAI_LIMIT = 25 * 1024 * 1024;
+    let processedAudio;
+    
     if (audioFile.size > OPENAI_LIMIT) {
-      console.warn('音檔大小超過 25MB，無法送往 OpenAI Whisper');
-      return res.status(413).json({
-        error: '音檔超過 25MB 限制，請裁剪或壓縮後再試'
-      });
+      const fileSizeMB = (audioFile.size / 1024 / 1024).toFixed(2);
+      console.log(`音檔大小 ${fileSizeMB}MB 超過 25MB，啟動自動處理...`);
+      
+      try {
+        // 使用音檔處理功能（壓縮/分割）
+        processedAudio = await processLargeAudio(audioFile, title);
+        console.log(`音檔處理完成，類型: ${processedAudio.type}`);
+      } catch (error) {
+        console.error('音檔處理失敗:', error);
+        return res.status(500).json({
+          error: `音檔處理失敗: ${error.message}`,
+          suggestions: [
+            '請檢查音檔格式是否正確',
+            '嘗試使用標準的 MP3 或 WAV 格式',
+            '確保音檔沒有損壞'
+          ]
+        });
+      }
+    } else {
+      // 檔案大小符合限制，直接使用原檔案
+      processedAudio = {
+        type: 'single',
+        file: audioFile.filepath,
+        size: audioFile.size
+      };
     }
 
     // 檢查 OpenAI API 金鑰
@@ -173,31 +197,93 @@ app.post('/api/transcribe', (req, res) => {
     console.log(`調用 Whisper API: ${openai.baseURL}`);
     const startTime = Date.now();
     
-    // 使用 OpenAI Whisper API 進行轉錄
-    openai.audio.transcriptions.create({
-      file: fs.createReadStream(audioFile.filepath),
-      model: 'whisper-1',
-      language: 'zh',
-      response_format: 'verbose_json',
-      timestamp_granularities: ['word'],
-    })
-    .then(transcription => {
+    try {
+      let finalTranscription;
+      
+      if (processedAudio.type === 'single') {
+        // 單一檔案轉錄
+        console.log('開始轉錄單一音檔...');
+        const transcription = await openai.audio.transcriptions.create({
+          file: fs.createReadStream(processedAudio.file),
+          model: 'whisper-1',
+          language: 'zh',
+          response_format: 'verbose_json',
+          timestamp_granularities: ['word'],
+          prompt: '請使用繁體中文進行轉錄。'
+        });
+        
+        finalTranscription = transcription;
+        
+      } else {
+        // 多片段轉錄
+        console.log(`開始轉錄 ${processedAudio.totalSegments} 個音檔片段...`);
+        const transcriptions = [];
+        
+        for (let i = 0; i < processedAudio.files.length; i++) {
+          const segmentFile = processedAudio.files[i];
+          console.log(`轉錄片段 ${i + 1}/${processedAudio.files.length}: ${path.basename(segmentFile)}`);
+          
+          const transcription = await openai.audio.transcriptions.create({
+            file: fs.createReadStream(segmentFile),
+            model: 'whisper-1',
+            language: 'zh',
+            response_format: 'verbose_json',
+            timestamp_granularities: ['word'],
+            prompt: '請使用繁體中文進行轉錄。'
+          });
+          
+          transcriptions.push(transcription);
+          
+          // 片段間稍作延遲，避免API請求過快
+          if (i < processedAudio.files.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+        
+        // 合併所有轉錄結果
+        console.log('合併轉錄結果...');
+        finalTranscription = mergeTranscriptions(transcriptions);
+      }
+      
       const endTime = Date.now();
       console.log(`OpenAI API 調用成功，耗時: ${(endTime - startTime) / 1000}秒`);
 
       // 清理臨時檔案
       try {
         fs.unlinkSync(audioFile.filepath);
+        
+        if (processedAudio.type === 'single' && processedAudio.file !== audioFile.filepath) {
+          fs.unlinkSync(processedAudio.file);
+        } else if (processedAudio.type === 'segments') {
+          // 清理片段檔案和目錄
+          processedAudio.files.forEach(file => {
+            try { fs.unlinkSync(file); } catch (e) {}
+          });
+          const segmentDir = path.dirname(processedAudio.files[0]);
+          try { fs.rmdirSync(segmentDir); } catch (e) {}
+          
+          // 清理壓縮檔案
+          const compressedFile = processedAudio.file;
+          if (compressedFile && fs.existsSync(compressedFile)) {
+            fs.unlinkSync(compressedFile);
+          }
+        }
+        
         console.log('臨時檔案清理成功');
       } catch (cleanupError) {
         console.warn('清理臨時檔案失敗:', cleanupError);
       }
 
       // 格式化逐字稿文字
-      const formattedText = formatTranscript(transcription);
+      const formattedText = finalTranscription.segments && finalTranscription.segments.length > 0
+        ? formatTranscript(finalTranscription)
+        : finalTranscription.text || '';
 
       console.log(`轉錄完成: ${title}`);
       console.log(`文字長度: ${formattedText.length} 字元`);
+      if (processedAudio.type === 'segments') {
+        console.log(`共處理 ${processedAudio.totalSegments} 個音檔片段`);
+      }
 
       // 回傳結果
       res.json({
@@ -205,19 +291,31 @@ app.post('/api/transcribe', (req, res) => {
         episodeId,
         title,
         text: formattedText,
-        duration: transcription.duration,
-        language: transcription.language,
-        segments: transcription.segments || [],
+        duration: finalTranscription.duration,
+        language: finalTranscription.language,
+        segments: finalTranscription.segments || [],
         url: null,
+        processed: processedAudio.type !== 'single',
+        totalSegments: processedAudio.type === 'segments' ? processedAudio.totalSegments : 1
       });
-    })
-    .catch(error => {
+      
+    } catch (error) {
       console.error('=== 轉錄錯誤 ===');
       console.error('錯誤詳情:', error);
       
       // 清理臨時檔案
       try {
         fs.unlinkSync(audioFile.filepath);
+        
+        if (processedAudio && processedAudio.type === 'single' && processedAudio.file !== audioFile.filepath) {
+          fs.unlinkSync(processedAudio.file);
+        } else if (processedAudio && processedAudio.type === 'segments') {
+          processedAudio.files.forEach(file => {
+            try { fs.unlinkSync(file); } catch (e) {}
+          });
+          const segmentDir = path.dirname(processedAudio.files[0]);
+          try { fs.rmdirSync(segmentDir); } catch (e) {}
+        }
       } catch (cleanupError) {
         console.warn('錯誤時清理臨時檔案失敗:', cleanupError);
       }
@@ -236,7 +334,7 @@ app.post('/api/transcribe', (req, res) => {
           error: `轉錄失敗: ${error.message}` 
         });
       }
-    });
+    }
   });
 });
 
@@ -347,6 +445,188 @@ function formatTime(seconds) {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = Math.floor(seconds % 60);
   return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+}
+
+// 音檔壓縮功能
+function compressAudio(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    console.log(`開始壓縮音檔: ${inputPath}`);
+    
+    ffmpeg(inputPath)
+      .audioCodec('mp3')
+      .audioBitrate('128k')
+      .audioFrequency(22050)
+      .audioChannels(1)
+      .format('mp3')
+      .on('start', (commandLine) => {
+        console.log('FFmpeg 命令:', commandLine);
+      })
+      .on('progress', (progress) => {
+        if (progress.percent) {
+          console.log(`壓縮進度: ${Math.round(progress.percent)}%`);
+        }
+      })
+      .on('end', () => {
+        console.log('音檔壓縮完成');
+        resolve(outputPath);
+      })
+      .on('error', (err) => {
+        console.error('音檔壓縮失敗:', err);
+        reject(err);
+      })
+      .save(outputPath);
+  });
+}
+
+// 音檔分割功能
+function splitAudio(inputPath, outputDir, segmentDuration = 600) { // 10分鐘片段
+  return new Promise((resolve, reject) => {
+    console.log(`開始分割音檔: ${inputPath}，片段長度: ${segmentDuration}秒`);
+    
+    // 創建輸出目錄
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+    
+    const outputPattern = path.join(outputDir, 'segment_%03d.mp3');
+    
+    ffmpeg(inputPath)
+      .audioCodec('mp3')
+      .audioBitrate('128k')
+      .format('mp3')
+      .outputOptions([
+        '-f', 'segment',
+        '-segment_time', segmentDuration.toString(),
+        '-reset_timestamps', '1'
+      ])
+      .on('start', (commandLine) => {
+        console.log('FFmpeg 分割命令:', commandLine);
+      })
+      .on('end', () => {
+        // 獲取生成的片段檔案列表
+        const files = fs.readdirSync(outputDir)
+          .filter(file => file.startsWith('segment_') && file.endsWith('.mp3'))
+          .sort()
+          .map(file => path.join(outputDir, file));
+        
+        console.log(`音檔分割完成，共 ${files.length} 個片段`);
+        resolve(files);
+      })
+      .on('error', (err) => {
+        console.error('音檔分割失敗:', err);
+        reject(err);
+      })
+      .save(outputPattern);
+  });
+}
+
+// 處理大音檔的主要函數
+async function processLargeAudio(audioFile, title) {
+  const tempDir = path.join(__dirname, 'temp');
+  const timestamp = Date.now();
+  const baseFilename = `audio_${timestamp}`;
+  
+  // 確保臨時目錄存在
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
+  }
+  
+  const compressedPath = path.join(tempDir, `${baseFilename}_compressed.mp3`);
+  
+  try {
+    // 步驟 1: 嘗試壓縮音檔
+    console.log('步驟 1: 壓縮音檔以減少檔案大小...');
+    await compressAudio(audioFile.filepath, compressedPath);
+    
+    // 檢查壓縮後的檔案大小
+    const compressedStats = fs.statSync(compressedPath);
+    const compressedSizeMB = compressedStats.size / 1024 / 1024;
+    console.log(`壓縮後檔案大小: ${compressedSizeMB.toFixed(2)}MB`);
+    
+    const OPENAI_LIMIT = 25 * 1024 * 1024;
+    
+    if (compressedStats.size <= OPENAI_LIMIT) {
+      // 壓縮後符合限制，直接返回壓縮檔案
+      console.log('✅ 壓縮後符合 25MB 限制，可直接轉錄');
+      return {
+        type: 'single',
+        file: compressedPath,
+        size: compressedStats.size
+      };
+    }
+    
+    // 步驟 2: 壓縮後還是太大，需要分割
+    console.log('步驟 2: 壓縮後仍超過限制，開始分割音檔...');
+    const segmentDir = path.join(tempDir, `${baseFilename}_segments`);
+    const segmentFiles = await splitAudio(compressedPath, segmentDir, 600); // 10分鐘片段
+    
+    console.log(`✅ 音檔處理完成，共 ${segmentFiles.length} 個片段`);
+    return {
+      type: 'segments',
+      files: segmentFiles,
+      totalSegments: segmentFiles.length
+    };
+    
+  } catch (error) {
+    // 清理臨時檔案
+    try {
+      if (fs.existsSync(compressedPath)) {
+        fs.unlinkSync(compressedPath);
+      }
+    } catch (cleanupError) {
+      console.warn('清理臨時檔案失敗:', cleanupError);
+    }
+    
+    throw new Error(`音檔處理失敗: ${error.message}`);
+  }
+}
+
+// 合併多個轉錄結果
+function mergeTranscriptions(transcriptions) {
+  let mergedText = '';
+  let totalDuration = 0;
+  let allSegments = [];
+  
+  transcriptions.forEach((transcription, index) => {
+    if (transcription.segments && transcription.segments.length > 0) {
+      // 調整時間戳（加上前面片段的總時長）
+      const adjustedSegments = transcription.segments.map(segment => ({
+        ...segment,
+        start: segment.start + totalDuration,
+        end: segment.end + totalDuration
+      }));
+      
+      allSegments = allSegments.concat(adjustedSegments);
+    }
+    
+    // 添加片段標識
+    if (transcriptions.length > 1) {
+      mergedText += `\n=== 片段 ${index + 1} ===\n`;
+    }
+    
+    if (transcription.segments && transcription.segments.length > 0) {
+      const segmentText = transcription.segments
+        .map(segment => {
+          const startTime = formatTime(segment.start + totalDuration);
+          const endTime = formatTime(segment.end + totalDuration);
+          return `[${startTime} - ${endTime}] ${segment.text.trim()}`;
+        })
+        .join('\n\n');
+      mergedText += segmentText;
+    } else {
+      mergedText += transcription.text || '';
+    }
+    
+    mergedText += '\n\n';
+    totalDuration += transcription.duration || 0;
+  });
+  
+  return {
+    text: mergedText.trim(),
+    duration: totalDuration,
+    segments: allSegments,
+    totalSegments: transcriptions.length
+  };
 }
 
 // 啟動服務器

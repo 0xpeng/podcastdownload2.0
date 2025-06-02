@@ -124,7 +124,18 @@ function App() {
       ));
 
       console.log(`"${episode.title}" 轉錄完成！`);
-      alert(`"${episode.title}" 轉錄完成！`);
+      
+      // 根據處理狀態顯示不同的完成訊息
+      let successMessage = `"${episode.title}" 轉錄完成！`;
+      if (transcript.processed) {
+        if (transcript.totalSegments > 1) {
+          successMessage += `\n\n✨ 音檔已自動分割為 ${transcript.totalSegments} 個片段並完成轉錄`;
+        } else {
+          successMessage += `\n\n🎵 音檔已自動壓縮處理`;
+        }
+      }
+      
+      alert(successMessage);
     } catch (error) {
       console.error('轉錄失敗:', error);
       setEpisodes(prev => prev.map(ep => 
@@ -132,7 +143,21 @@ function App() {
           ? { ...ep, transcriptStatus: 'error' }
           : ep
       ));
-      alert(`轉錄失敗：${error instanceof Error ? error.message : '未知錯誤'}`);
+      
+      // 根據錯誤類型提供不同的處理
+      const errorMessage = error instanceof Error ? error.message : '未知錯誤';
+      
+      if (errorMessage.includes('OpenAI API 額度不足')) {
+        alert(`轉錄失敗 - API 額度不足\n\n${errorMessage}\n\n請檢查您的 OpenAI 帳戶餘額。`);
+      } else if (errorMessage.includes('音檔格式不支援') || errorMessage.includes('檔案損壞')) {
+        alert(`轉錄失敗 - 音檔格式問題\n\n${errorMessage}\n\n建議：請確保使用支援的音檔格式（MP3、WAV 等）。`);
+      } else if (errorMessage.includes('音檔處理失敗')) {
+        alert(`轉錄失敗 - 音檔處理錯誤\n\n${errorMessage}\n\n建議：請檢查音檔是否完整且格式正確。`);
+      } else if (errorMessage.includes('代理下載失敗')) {
+        alert(`轉錄失敗 - 無法下載音檔\n\n${errorMessage}\n\n建議：請檢查網絡連接或嘗試其他集數。`);
+      } else {
+        alert(`轉錄失敗：${errorMessage}`);
+      }
     } finally {
       setTranscribing(prev => {
         const newSet = new Set(prev);
@@ -262,7 +287,24 @@ function App() {
     if (!response.ok) {
       const errorText = await response.text();
       console.error('轉錄 API 錯誤:', errorText);
-      throw new Error(`轉錄服務錯誤 (${response.status}): ${response.statusText}\n${errorText}`);
+      
+      // 嘗試解析錯誤回應
+      let errorData: any = {};
+      try {
+        errorData = JSON.parse(errorText);
+      } catch (parseError) {
+        // 如果無法解析為 JSON，保持原始文字
+        errorData = { error: errorText };
+      }
+      
+      // 針對常見錯誤提供友好的錯誤訊息
+      if (response.status === 402) {
+        throw new Error('OpenAI API 額度不足，請檢查帳戶餘額');
+      } else if (response.status === 400) {
+        throw new Error('音檔格式不支援或檔案損壞，請嘗試使用 MP3 或 WAV 格式');
+      } else {
+        throw new Error(`轉錄服務錯誤 (${response.status}): ${errorData.error || errorText}`);
+      }
     }
 
     console.log('✅ 轉錄服務已確認開始處理，正在等待結果...');
@@ -753,8 +795,9 @@ function App() {
       if (progress <= 40) return '準備上傳...';
       if (progress <= 50) return '上傳音檔...';
       if (progress <= 60) return '開始轉錄...';
-      if (progress <= 70) return '✅ 轉錄進行中...';
-      if (progress <= 90) return '處理結果...';
+      if (progress <= 70) return '🎵 音檔處理中...';
+      if (progress <= 80) return '🎤 轉錄進行中...';
+      if (progress <= 90) return '📝 處理結果...';
       return '即將完成...';
     };
 
