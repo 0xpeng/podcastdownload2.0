@@ -831,6 +831,55 @@
   animation: pulse 2s infinite;
 }
 
+/* 播放狀態指示器 */
+.audio-player.playing {
+  border-color: rgba(0, 212, 255, 0.3);
+  background: rgba(0, 212, 255, 0.02);
+}
+
+.audio-player.playing::before {
+  opacity: 0.8;
+}
+
+/* 錯誤狀態樣式 */
+.audio-player.error {
+  border-color: rgba(255, 71, 87, 0.4);
+  background: rgba(255, 71, 87, 0.02);
+}
+
+.audio-player.error::before {
+  background: linear-gradient(90deg, rgba(255, 71, 87, 0.05) 0%, transparent 100%);
+  opacity: 1;
+}
+
+.audio-player.error:hover {
+  border-color: rgba(255, 71, 87, 0.6);
+  box-shadow: 0 3px 15px rgba(255, 71, 87, 0.15);
+}
+
+.audio-player.error .play-button {
+  background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
+  animation: pulse-error 2s infinite;
+}
+
+.audio-player.error .play-button:hover:not(:disabled) {
+  box-shadow: 0 3px 10px rgba(255, 107, 107, 0.4);
+  transform: scale(1.05);
+}
+
+/* 錯誤狀態動畫 */
+@keyframes pulse-error {
+  0% {
+    box-shadow: 0 2px 6px rgba(255, 71, 87, 0.3);
+  }
+  50% {
+    box-shadow: 0 2px 8px rgba(255, 71, 87, 0.5);
+  }
+  100% {
+    box-shadow: 0 2px 6px rgba(255, 71, 87, 0.3);
+  }
+}
+
 /* 音頻播放器樣式 - 重新設計為更小、透明、與背景融合 */
 .audio-player {
   display: flex;
@@ -1156,12 +1205,7 @@
   animation: pulse-play-mini 4s infinite;
 }
 
-/* 播放狀態指示器 */
-.audio-player.playing {
-  border-color: rgba(0, 212, 255, 0.3);
-  background: rgba(0, 212, 255, 0.02);
-}
-
-.audio-player.playing::before {
-  opacity: 0.8;
+/* 覆蓋錯誤狀態的動畫 */
+.audio-player.error .play-button:not(:disabled) {
+  animation: pulse-error 2s infinite;
 } 

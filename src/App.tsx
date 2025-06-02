@@ -31,6 +31,16 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
   const [volume, setVolume] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
+  const [currentAudioUrl, setCurrentAudioUrl] = useState<string>('');
+  const [proxyIndex, setProxyIndex] = useState(0);
+
+  // 音頻代理列表
+  const audioProxies = [
+    '', // 直接請求
+    'https://corsproxy.io/?',
+    'https://cors.bridged.cc/',
+    'https://proxy.cors.sh/',
+  ];
 
   // 檢查音頻URL是否有效
   const isValidAudioUrl = (url: string): boolean => {
@@ -46,27 +56,72 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
   const audioUrl = episode.audioUrl;
   const isAudioValid = isValidAudioUrl(audioUrl);
 
+  // 獲取代理URL
+  const getProxyUrl = (originalUrl: string, proxyIndex: number): string => {
+    if (proxyIndex >= audioProxies.length || proxyIndex < 0) return originalUrl;
+    const proxy = audioProxies[proxyIndex];
+    return proxy ? proxy + encodeURIComponent(originalUrl) : originalUrl;
+  };
+
+  // 嘗試下一個代理
+  const tryNextProxy = () => {
+    const nextIndex = proxyIndex + 1;
+    if (nextIndex < audioProxies.length) {
+      console.log(`嘗試使用代理 ${audioProxies[nextIndex] || '直接請求'} 播放音頻`);
+      setProxyIndex(nextIndex);
+      setHasError(false);
+      return true;
+    }
+    return false;
+  };
+
+  // 重置代理索引
+  const resetProxy = () => {
+    setProxyIndex(0);
+    setHasError(false);
+  };
+
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !isAudioValid) return;
+
+    // 設置當前音頻URL
+    const proxiedUrl = getProxyUrl(audioUrl, proxyIndex);
+    setCurrentAudioUrl(proxiedUrl);
+    
+    console.log(`設置音頻源: ${proxyIndex === 0 ? '直接請求' : `代理 ${audioProxies[proxyIndex]}`}`);
+    console.log(`音頻URL: ${proxiedUrl.substring(0, 100)}...`);
 
     // 重置錯誤狀態
     setHasError(false);
     
     const updateTime = () => setCurrentTime(audio.currentTime);
     const updateDuration = () => setTotalDuration(audio.duration || 0);
-    const handleLoadStart = () => setIsLoading(true);
+    const handleLoadStart = () => {
+      setIsLoading(true);
+      console.log('開始載入音頻...');
+    };
     const handleCanPlay = () => {
       setIsLoading(false);
       setHasError(false);
+      console.log('音頻可以播放');
     };
     const handleLoadedMetadata = () => {
       setTotalDuration(audio.duration || 0);
+      console.log(`音頻時長: ${audio.duration}秒`);
     };
     const handleError = (e: Event) => {
       console.error('音頻加載錯誤:', e);
       setIsLoading(false);
-      setHasError(true);
+      
+      // 嘗試使用下一個代理
+      if (tryNextProxy()) {
+        console.log('嘗試使用下一個代理...');
+        return; // 不設置錯誤狀態，讓useEffect重新運行
+      } else {
+        console.error('所有代理都失敗了');
+        setHasError(true);
+      }
     };
 
     audio.addEventListener('timeupdate', updateTime);
@@ -76,16 +131,8 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
     audio.addEventListener('canplay', handleCanPlay);
     audio.addEventListener('error', handleError);
 
-    // 如果正在播放，開始播放
-    if (isPlaying) {
-      audio.play().catch(error => {
-        console.error('播放失敗:', error);
-        setHasError(true);
-        setIsLoading(false);
-      });
-    } else {
-      audio.pause();
-    }
+    // 設置音頻源
+    audio.src = proxiedUrl;
 
     return () => {
       audio.removeEventListener('timeupdate', updateTime);
@@ -95,7 +142,26 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
       audio.removeEventListener('canplay', handleCanPlay);
       audio.removeEventListener('error', handleError);
     };
-  }, [isPlaying, audioUrl, isAudioValid]);
+  }, [audioUrl, isAudioValid, proxyIndex]);
+
+  // 播放控制effect
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !isAudioValid || hasError) return;
+
+    if (isPlaying) {
+      audio.play().catch(error => {
+        console.error('播放失敗:', error);
+        // 如果播放失敗，嘗試下一個代理
+        if (!tryNextProxy()) {
+          setHasError(true);
+          setIsLoading(false);
+        }
+      });
+    } else {
+      audio.pause();
+    }
+  }, [isPlaying, currentAudioUrl]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const audio = audioRef.current;
@@ -114,31 +180,35 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
     }
   };
 
+  // 手動重試
+  const handleRetry = () => {
+    resetProxy();
+  };
+
   const progressPercentage = totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0;
 
   // 確定播放按鈕的狀態
-  const isButtonDisabled = !isAudioValid || isLoading || hasError;
-  const buttonTitle = hasError ? '音頻加載失敗' : 
+  const isButtonDisabled = !isAudioValid || isLoading;
+  const buttonTitle = hasError ? `音頻加載失敗 (已嘗試 ${proxyIndex + 1}/${audioProxies.length} 個方法)` : 
                      !isAudioValid ? '無效的音頻連結' :
                      isLoading ? '正在加載...' :
                      isPlaying ? '暫停' : '播放';
 
   return (
-    <div className={`audio-player ${isPlaying ? 'playing' : ''}`}>
+    <div className={`audio-player ${isPlaying ? 'playing' : ''} ${hasError ? 'error' : ''}`}>
       <audio
         ref={audioRef}
-        src={isAudioValid ? audioUrl : undefined}
         preload="metadata"
       />
       
       <div className="player-controls">
         <button
-          onClick={onTogglePlay}
+          onClick={hasError ? handleRetry : onTogglePlay}
           disabled={isButtonDisabled}
           className="play-button"
-          title={buttonTitle}
+          title={hasError ? '點擊重試' : buttonTitle}
         >
-          {hasError ? '❌' : 
+          {hasError ? '🔄' : 
            isLoading ? '⏳' : 
            isPlaying ? '⏸️' : '▶️'}
         </button>
@@ -683,13 +753,13 @@ function App() {
 
   const parseRssFeed = async (url: string) => {
     try {
+      // 更新的CORS代理列表 - 移除不工作的代理
       const corsProxies = [
-        '',
-        'https://api.allorigins.win/raw?url=',
+        '', // 先嘗試直接請求
         'https://corsproxy.io/?',
-        'https://cors-anywhere.herokuapp.com/',
         'https://cors.bridged.cc/',
-        'https://yacdn.org/proxy/'
+        'https://proxy.cors.sh/',
+        'https://cors-anywhere.herokuapp.com/',
       ];
 
       let response: Response | null = null;
@@ -938,12 +1008,12 @@ function App() {
     setDownloading(true);
     setProgress(0);
     
+    // 更新的CORS代理列表 - 與其他功能保持一致
     const corsProxies = [
-      'https://cors-anywhere.herokuapp.com/',
-      'https://api.allorigins.win/raw?url=',
       'https://corsproxy.io/?',
       'https://cors.bridged.cc/',
-      'https://yacdn.org/proxy/'
+      'https://proxy.cors.sh/',
+      'https://cors-anywhere.herokuapp.com/',
     ];
     
     for (let i = 0; i < selected.length; i++) {
