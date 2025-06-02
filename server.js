@@ -6,7 +6,7 @@ const https = require('https');
 const http = require('http');
 const { URL } = require('url');
 const OpenAI = require('openai');
-const ffmpeg = require('fluent-ffmpeg');
+const ffmpeg = require('fluent-ffmpeg'); let ffmpegAvailable = true;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -164,7 +164,7 @@ app.post('/api/transcribe', (req, res) => {
       
       try {
         // 使用音檔處理功能（壓縮/分割）
-        processedAudio = await processLargeAudio(audioFile, title);
+        try { processedAudio = await processLargeAudio(audioFile, title); } catch (ffmpegError) { if (ffmpegError.message.includes("ffmpeg") || ffmpegError.message.includes("ENOENT")) { console.error("FFmpeg 不可用:", ffmpegError.message); return res.status(413).json({ error: "音檔大小超過限制，且伺服器音檔處理功能不可用", message: "請手動壓縮音檔", suggestions: ["使用音訊編輯軟體壓縮至25MB以下", "降低音質至128kbps或更低", "分割成較短片段", "轉換為MP3格式"], currentSize: fileSizeMB + "MB", maxSize: "25MB" }); } throw ffmpegError; }
         console.log(`音檔處理完成，類型: ${processedAudio.type}`);
       } catch (error) {
         console.error('音檔處理失敗:', error);
