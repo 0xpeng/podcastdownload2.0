@@ -543,38 +543,98 @@ function formatTime(seconds) {
   return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
 }
 
-// 音檔壓縮功能
+// 音檔壓縮功能 - 增強版，支持多種編解碼器
 function compressAudio(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     console.log(`開始壓縮音檔: ${inputPath}`);
     
-    ffmpeg(inputPath)
-      .audioCodec('mp3')
-      .audioBitrate('128k')
-      .audioFrequency(22050)
-      .audioChannels(1)
-      .format('mp3')
-      .on('start', (commandLine) => {
-        console.log('FFmpeg 命令:', commandLine);
-      })
-      .on('progress', (progress) => {
-        if (progress.percent) {
-          console.log(`壓縮進度: ${Math.round(progress.percent)}%`);
-        }
-      })
-      .on('end', () => {
-        console.log('音檔壓縮完成');
-        resolve(outputPath);
-      })
-      .on('error', (err) => {
-        console.error('音檔壓縮失敗:', err);
-        reject(err);
-      })
-      .save(outputPath);
+    // 嘗試不同的編解碼器配置
+    const codecConfigs = [
+      // 配置 1: 嘗試 libmp3lame (最佳)
+      {
+        codec: 'libmp3lame',
+        format: 'mp3',
+        ext: '.mp3',
+        bitrate: '64k'
+      },
+      // 配置 2: 嘗試 mp3 (備用)
+      {
+        codec: 'mp3',
+        format: 'mp3', 
+        ext: '.mp3',
+        bitrate: '64k'
+      },
+      // 配置 3: 使用 AAC (通用支持)
+      {
+        codec: 'aac',
+        format: 'mp4',
+        ext: '.m4a',
+        bitrate: '64k'
+      },
+      // 配置 4: 使用 libvorbis + ogg (開源)
+      {
+        codec: 'libvorbis',
+        format: 'ogg',
+        ext: '.ogg',
+        bitrate: '64k'
+      },
+      // 配置 5: 最基本的 PCM 重採樣 (總是可用)
+      {
+        codec: 'pcm_s16le',
+        format: 'wav',
+        ext: '.wav',
+        bitrate: null
+      }
+    ];
+
+    async function tryCompress(configIndex = 0) {
+      if (configIndex >= codecConfigs.length) {
+        reject(new Error('所有編解碼器都不可用，無法壓縮音檔'));
+        return;
+      }
+
+      const config = codecConfigs[configIndex];
+      const finalOutputPath = outputPath.replace(/\.[^.]+$/, config.ext);
+      
+      console.log(`嘗試編解碼器 ${configIndex + 1}/${codecConfigs.length}: ${config.codec} (${config.format})`);
+
+      const command = ffmpeg(inputPath)
+        .audioCodec(config.codec)
+        .audioFrequency(16000)  // 降低採樣率以減少檔案大小
+        .audioChannels(1)       // 單聲道
+        .format(config.format);
+
+      // 只有在支持比特率的編解碼器上設置比特率
+      if (config.bitrate) {
+        command.audioBitrate(config.bitrate);
+      }
+
+      command
+        .on('start', (commandLine) => {
+          console.log(`FFmpeg 命令: ${commandLine}`);
+        })
+        .on('progress', (progress) => {
+          if (progress.percent) {
+            console.log(`壓縮進度: ${Math.round(progress.percent)}%`);
+          }
+        })
+        .on('end', () => {
+          console.log(`音檔壓縮完成，使用編解碼器: ${config.codec}`);
+          resolve(finalOutputPath);
+        })
+        .on('error', (err) => {
+          console.log(`編解碼器 ${config.codec} 失敗: ${err.message}`);
+          // 嘗試下一個編解碼器
+          tryCompress(configIndex + 1);
+        })
+        .save(finalOutputPath);
+    }
+
+    tryCompress();
   });
 }
 
-// 音檔分割功能
+// 音檔分割功能 - 增強版，支持多種格式
 function splitAudio(inputPath, outputDir, segmentDuration = 600) { // 10分鐘片段
   return new Promise((resolve, reject) => {
     console.log(`開始分割音檔: ${inputPath}，片段長度: ${segmentDuration}秒`);
@@ -584,24 +644,50 @@ function splitAudio(inputPath, outputDir, segmentDuration = 600) { // 10分鐘�
       fs.mkdirSync(outputDir, { recursive: true });
     }
     
-    const outputPattern = path.join(outputDir, 'segment_%03d.mp3');
+    // 根據輸入檔案決定輸出格式
+    const inputExt = path.extname(inputPath).toLowerCase();
+    let outputExt = '.mp3';
+    let audioCodec = 'libmp3lame';
+    let audioBitrate = '64k';
     
-    ffmpeg(inputPath)
-      .audioCodec('mp3')
-      .audioBitrate('128k')
-      .format('mp3')
+    // 根據輸入格式選擇最合適的輸出配置
+    if (inputExt === '.m4a' || inputExt === '.mp4') {
+      outputExt = '.m4a';
+      audioCodec = 'aac';
+    } else if (inputExt === '.ogg') {
+      outputExt = '.ogg';
+      audioCodec = 'libvorbis';
+    } else if (inputExt === '.wav') {
+      outputExt = '.wav';
+      audioCodec = 'pcm_s16le';
+      audioBitrate = null; // WAV 不需要比特率設置
+    }
+    
+    const outputPattern = path.join(outputDir, `segment_%03d${outputExt}`);
+    console.log(`分割輸出格式: ${outputExt}，編解碼器: ${audioCodec}`);
+    
+    const command = ffmpeg(inputPath)
+      .audioCodec(audioCodec)
+      .format(outputExt.substring(1)) // 移除點號
       .outputOptions([
         '-f', 'segment',
         '-segment_time', segmentDuration.toString(),
         '-reset_timestamps', '1'
-      ])
+      ]);
+    
+    // 只在需要時設置比特率
+    if (audioBitrate) {
+      command.audioBitrate(audioBitrate);
+    }
+    
+    command
       .on('start', (commandLine) => {
         console.log('FFmpeg 分割命令:', commandLine);
       })
       .on('end', () => {
         // 獲取生成的片段檔案列表
         const files = fs.readdirSync(outputDir)
-          .filter(file => file.startsWith('segment_') && file.endsWith('.mp3'))
+          .filter(file => file.startsWith('segment_') && file.endsWith(outputExt))
           .sort()
           .map(file => path.join(outputDir, file));
         
@@ -632,12 +718,13 @@ async function processLargeAudio(audioFile, title) {
   try {
     // 步驟 1: 嘗試壓縮音檔
     console.log('步驟 1: 壓縮音檔以減少檔案大小...');
-    await compressAudio(audioFile.filepath, compressedPath);
+    const actualCompressedPath = await compressAudio(audioFile.filepath, compressedPath);
     
     // 檢查壓縮後的檔案大小
-    const compressedStats = fs.statSync(compressedPath);
+    const compressedStats = fs.statSync(actualCompressedPath);
     const compressedSizeMB = compressedStats.size / 1024 / 1024;
     console.log(`壓縮後檔案大小: ${compressedSizeMB.toFixed(2)}MB`);
+    console.log(`使用的檔案格式: ${path.extname(actualCompressedPath)}`);
     
     const OPENAI_LIMIT = 25 * 1024 * 1024;
     
@@ -646,7 +733,7 @@ async function processLargeAudio(audioFile, title) {
       console.log('✅ 壓縮後符合 25MB 限制，可直接轉錄');
       return {
         type: 'single',
-        file: compressedPath,
+        file: actualCompressedPath,
         size: compressedStats.size
       };
     }
@@ -654,20 +741,29 @@ async function processLargeAudio(audioFile, title) {
     // 步驟 2: 壓縮後還是太大，需要分割
     console.log('步驟 2: 壓縮後仍超過限制，開始分割音檔...');
     const segmentDir = path.join(tempDir, `${baseFilename}_segments`);
-    const segmentFiles = await splitAudio(compressedPath, segmentDir, 600); // 10分鐘片段
+    const segmentFiles = await splitAudio(actualCompressedPath, segmentDir, 600); // 10分鐘片段
     
     console.log(`✅ 音檔處理完成，共 ${segmentFiles.length} 個片段`);
     return {
       type: 'segments',
       files: segmentFiles,
-      totalSegments: segmentFiles.length
+      totalSegments: segmentFiles.length,
+      file: actualCompressedPath // 保存壓縮檔案路徑用於清理
     };
     
   } catch (error) {
     // 清理臨時檔案
     try {
-      if (fs.existsSync(compressedPath)) {
-        fs.unlinkSync(compressedPath);
+      // 嘗試清理可能的檔案格式
+      const possibleExtensions = ['.mp3', '.m4a', '.ogg', '.wav'];
+      const basePath = compressedPath.replace(/\.[^.]+$/, '');
+      
+      for (const ext of possibleExtensions) {
+        const possiblePath = basePath + ext;
+        if (fs.existsSync(possiblePath)) {
+          fs.unlinkSync(possiblePath);
+          console.log(`清理了臨時檔案: ${possiblePath}`);
+        }
       }
     } catch (cleanupError) {
       console.warn('清理臨時檔案失敗:', cleanupError);
