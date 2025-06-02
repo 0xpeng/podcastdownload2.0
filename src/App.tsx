@@ -303,7 +303,7 @@ function App() {
       } else if (response.status === 400) {
         throw new Error('音檔格式不支援或檔案損壞，請嘗試使用 MP3 或 WAV 格式');
       } else {
-        throw new Error(`轉錄服務錯誤 (${response.status}): ${errorData.error || errorText}`);
+        if (response.status === 413 && errorData.suggestions) { const suggestionText = errorData.suggestions.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n"); const detailedMessage = [ errorData.error || "檔案大小超過限制", "", `目前檔案大小：${errorData.currentSize || "未知"}`, `最大限制：${errorData.maxSize || "25MB"}`, "", "💡 解決方案：", suggestionText ].join("\n"); throw new Error(detailedMessage); } else { throw new Error(`轉錄服務錯誤 (${response.status}): ${errorData.error || errorText}`); }
       }
     }
 
