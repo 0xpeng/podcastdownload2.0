@@ -16,6 +16,99 @@ const {
   TranscriptionProcessor
 } = require('./transcription-service');
 
+// 新增：音檔格式驗證和正規化函數
+function validateAndNormalizeAudioFile(filePath) {
+  const supportedExtensions = ['.flac', '.m4a', '.mp3', '.mp4', '.mpeg', '.mpga', '.oga', '.ogg', '.wav', '.webm'];
+  const currentExt = path.extname(filePath).toLowerCase();
+  
+  console.log(`驗證音檔格式: ${filePath}`);
+  console.log(`當前副檔名: ${currentExt}`);
+  
+  // 檢查是否為支援的格式
+  if (!supportedExtensions.includes(currentExt)) {
+    throw new Error(`不支援的音檔格式: ${currentExt}。支援格式: ${supportedExtensions.join(', ')}`);
+  }
+  
+  // 正規化檔案副檔名（確保小寫）
+  const normalizedPath = filePath.replace(/\.[^.]+$/, currentExt);
+  
+  // 如果路徑改變了，重新命名檔案
+  if (normalizedPath !== filePath && fs.existsSync(filePath)) {
+    console.log(`正規化檔案副檔名: ${filePath} -> ${normalizedPath}`);
+    fs.renameSync(filePath, normalizedPath);
+    return normalizedPath;
+  }
+  
+  return filePath;
+}
+
+// 新增：檢查檔案是否為有效的音檔
+function validateAudioFileContent(filePath) {
+  try {
+    const stats = fs.statSync(filePath);
+    console.log(`檔案大小: ${(stats.size / 1024 / 1024).toFixed(2)}MB`);
+    
+    // 檢查檔案大小
+    if (stats.size === 0) {
+      throw new Error('音檔檔案為空');
+    }
+    
+    if (stats.size < 1000) { // 小於 1KB 可能不是有效音檔
+      throw new Error('音檔檔案太小，可能已損壞');
+    }
+    
+    // 讀取檔案前幾個位元組檢查檔案簽名
+    const buffer = Buffer.alloc(12);
+    const fd = fs.openSync(filePath, 'r');
+    fs.readSync(fd, buffer, 0, 12, 0);
+    fs.closeSync(fd);
+    
+    // 檢查常見音檔格式的檔案簽名
+    const hex = buffer.toString('hex').toUpperCase();
+    console.log(`檔案簽名: ${hex}`);
+    
+    // MP3 檔案簽名檢查
+    if (hex.startsWith('494433') || // ID3v2
+        hex.startsWith('FFFB') ||   // MP3 frame header
+        hex.startsWith('FFF3') ||   // MP3 frame header
+        hex.startsWith('FFF2')) {   // MP3 frame header
+      console.log('✅ 檔案簽名確認為 MP3 格式');
+      return true;
+    }
+    
+    // WAV 檔案簽名
+    if (hex.startsWith('52494646') && hex.includes('57415645')) {
+      console.log('✅ 檔案簽名確認為 WAV 格式');
+      return true;
+    }
+    
+    // M4A/MP4 檔案簽名
+    if (hex.includes('66747970')) {
+      console.log('✅ 檔案簽名確認為 M4A/MP4 格式');
+      return true;
+    }
+    
+    // OGG 檔案簽名
+    if (hex.startsWith('4F676753')) {
+      console.log('✅ 檔案簽名確認為 OGG 格式');
+      return true;
+    }
+    
+    // FLAC 檔案簽名
+    if (hex.startsWith('664C6143')) {
+      console.log('✅ 檔案簽名確認為 FLAC 格式');
+      return true;
+    }
+    
+    console.log('⚠️ 無法識別檔案格式，但將嘗試繼續處理');
+    return true;
+    
+  } catch (error) {
+    console.error('檔案驗證失敗:', error);
+    throw new Error(`音檔檔案驗證失敗: ${error.message}`);
+  }
+}
+
 let ffmpegAvailable = true;
 
 const app = express();
@@ -151,6 +244,30 @@ app.post('/api/transcribe', (req, res) => {
   const form = new formidable.IncomingForm({
     maxFileSize: 30 * 1024 * 1024, // 30MB 上傳上限，稍高於 OpenAI 25MB 限制
     keepExtensions: true,
+    // 增強檔案名稱處理
+    filename: (name, ext, part, form) => {
+      // 確保檔案有適當的副檔名
+      if (!ext || ext === '') {
+        // 根據 MIME 類型推斷副檔名
+        const mimeType = part.mimetype || '';
+        if (mimeType.includes('mp3') || mimeType.includes('mpeg')) {
+          ext = '.mp3';
+        } else if (mimeType.includes('wav')) {
+          ext = '.wav';
+        } else if (mimeType.includes('m4a') || mimeType.includes('mp4')) {
+          ext = '.m4a';
+        } else if (mimeType.includes('ogg')) {
+          ext = '.ogg';
+        } else if (mimeType.includes('flac')) {
+          ext = '.flac';
+        } else {
+          ext = '.mp3'; // 預設為 mp3
+        }
+      }
+      // 確保副檔名為小寫
+      ext = ext.toLowerCase();
+      return `audio_${Date.now()}${ext}`;
+    }
   });
   
   form.parse(req, async (err, fields, files) => {
@@ -175,6 +292,44 @@ app.post('/api/transcribe', (req, res) => {
     console.log(`輸出格式: ${outputFormats.join(', ')}`);
     console.log(`內容類型: ${contentType}`);
     console.log(`說話者分離: ${enableSpeakerDiarization ? '啟用' : '停用'}`);
+
+    // 新增：驗證和正規化音檔格式
+    try {
+      console.log('=== 音檔格式驗證開始 ===');
+      console.log(`原始檔案路徑: ${audioFile.filepath}`);
+      console.log(`原始檔案名稱: ${audioFile.originalFilename || audioFile.name}`);
+      
+      // 驗證和正規化檔案格式
+      const normalizedFilePath = validateAndNormalizeAudioFile(audioFile.filepath);
+      audioFile.filepath = normalizedFilePath;
+      
+      // 驗證檔案內容
+      validateAudioFileContent(audioFile.filepath);
+      
+      console.log(`✅ 音檔格式驗證通過: ${audioFile.filepath}`);
+      console.log('=== 音檔格式驗證完成 ===');
+      
+    } catch (validationError) {
+      console.error('=== 音檔格式驗證失敗 ===');
+      console.error('驗證錯誤:', validationError);
+      
+      // 清理上傳的檔案
+      try {
+        fs.unlinkSync(audioFile.filepath);
+      } catch (cleanupError) {
+        console.warn('清理無效檔案失敗:', cleanupError);
+      }
+      
+      return res.status(400).json({
+        error: `音檔格式驗證失敗: ${validationError.message}`,
+        suggestions: [
+          '請確保檔案是有效的音檔格式',
+          '支援格式: MP3, WAV, M4A, FLAC, OGG, WebM',
+          '檢查檔案是否完整下載',
+          '嘗試使用其他音檔轉換工具重新編碼'
+        ]
+      });
+    }
 
     // OpenAI Whisper 限制為 25MB，超出則自動處理
     const OPENAI_LIMIT = 25 * 1024 * 1024;
@@ -726,6 +881,17 @@ async function processLargeAudio(audioFile, title) {
     console.log(`壓縮後檔案大小: ${compressedSizeMB.toFixed(2)}MB`);
     console.log(`使用的檔案格式: ${path.extname(actualCompressedPath)}`);
     
+    // 新增：驗證壓縮後的檔案
+    try {
+      console.log('驗證壓縮後的音檔格式...');
+      const validatedCompressedPath = validateAndNormalizeAudioFile(actualCompressedPath);
+      validateAudioFileContent(validatedCompressedPath);
+      console.log('✅ 壓縮後音檔格式驗證通過');
+    } catch (validationError) {
+      console.error('壓縮後音檔驗證失敗:', validationError);
+      throw new Error(`壓縮後音檔格式無效: ${validationError.message}`);
+    }
+    
     const OPENAI_LIMIT = 25 * 1024 * 1024;
     
     if (compressedStats.size <= OPENAI_LIMIT) {
@@ -743,11 +909,28 @@ async function processLargeAudio(audioFile, title) {
     const segmentDir = path.join(tempDir, `${baseFilename}_segments`);
     const segmentFiles = await splitAudio(actualCompressedPath, segmentDir, 600); // 10分鐘片段
     
-    console.log(`✅ 音檔處理完成，共 ${segmentFiles.length} 個片段`);
+    // 新增：驗證所有分割片段
+    console.log('驗證分割片段格式...');
+    const validatedSegmentFiles = [];
+    for (let i = 0; i < segmentFiles.length; i++) {
+      const segmentFile = segmentFiles[i];
+      try {
+        console.log(`驗證片段 ${i + 1}/${segmentFiles.length}: ${path.basename(segmentFile)}`);
+        const validatedSegmentPath = validateAndNormalizeAudioFile(segmentFile);
+        validateAudioFileContent(validatedSegmentPath);
+        validatedSegmentFiles.push(validatedSegmentPath);
+        console.log(`✅ 片段 ${i + 1} 驗證通過`);
+      } catch (validationError) {
+        console.error(`片段 ${i + 1} 驗證失敗:`, validationError);
+        throw new Error(`分割片段 ${i + 1} 格式無效: ${validationError.message}`);
+      }
+    }
+    
+    console.log(`✅ 音檔處理完成，共 ${validatedSegmentFiles.length} 個片段`);
     return {
       type: 'segments',
-      files: segmentFiles,
-      totalSegments: segmentFiles.length,
+      files: validatedSegmentFiles,
+      totalSegments: validatedSegmentFiles.length,
       file: actualCompressedPath // 保存壓縮檔案路徑用於清理
     };
     
