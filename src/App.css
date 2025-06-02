@@ -831,29 +831,50 @@
   animation: pulse 2s infinite;
 }
 
-/* 音頻播放器樣式 */
+/* 音頻播放器樣式 - 重新設計為扁平緊湊風格 */
 .audio-player {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  background: #f8f9fa;
-  border-radius: 12px;
-  border: 1px solid #e9ecef;
-  min-width: 220px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border-radius: 20px;
+  border: 1px solid #dee2e6;
+  min-width: 280px;
+  height: 48px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
   transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.audio-player::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, rgba(0, 123, 255, 0.05) 0%, transparent 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.audio-player:hover::before {
+  opacity: 1;
 }
 
 .audio-player:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 20px rgba(0, 123, 255, 0.15);
   transform: translateY(-1px);
+  border-color: rgba(0, 123, 255, 0.3);
 }
 
 .player-controls {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .play-button {
@@ -861,41 +882,44 @@
   color: white;
   border: none;
   border-radius: 50%;
-  width: 42px;
-  height: 42px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  font-size: 18px;
-  transition: all 0.3s ease;
-  box-shadow: 0 2px 8px rgba(0, 123, 255, 0.3);
+  font-size: 14px;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 6px rgba(0, 123, 255, 0.3);
+  flex-shrink: 0;
 }
 
 .play-button:hover:not(:disabled) {
-  transform: scale(1.1);
-  box-shadow: 0 4px 16px rgba(0, 123, 255, 0.4);
+  transform: scale(1.05);
+  box-shadow: 0 3px 12px rgba(0, 123, 255, 0.4);
 }
 
 .play-button:active:not(:disabled) {
-  transform: scale(0.95);
+  transform: scale(0.98);
 }
 
 .play-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
   transform: none;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .time-info {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 13px;
+  gap: 2px;
+  font-size: 11px;
   color: #6c757d;
   font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
   font-weight: 500;
+  flex-shrink: 0;
+  min-width: 60px;
 }
 
 .current-time {
@@ -905,7 +929,7 @@
 
 .time-separator {
   color: #adb5bd;
-  margin: 0 2px;
+  margin: 0 1px;
 }
 
 .total-time {
@@ -913,15 +937,16 @@
 }
 
 .progress-container {
-  width: 100%;
+  flex: 1;
+  min-width: 80px;
   position: relative;
 }
 
 .progress-slider {
   width: 100%;
-  height: 6px;
+  height: 4px;
   background: #e9ecef;
-  border-radius: 3px;
+  border-radius: 2px;
   appearance: none;
   cursor: pointer;
   outline: none;
@@ -929,55 +954,56 @@
 }
 
 .progress-slider:hover {
-  height: 8px;
+  height: 6px;
 }
 
 .progress-slider::-webkit-slider-thumb {
   appearance: none;
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: #007bff;
   cursor: pointer;
-  border: 3px solid white;
-  box-shadow: 0 2px 6px rgba(0, 123, 255, 0.3);
+  border: 2px solid white;
+  box-shadow: 0 1px 4px rgba(0, 123, 255, 0.3);
   transition: all 0.2s ease;
 }
 
 .progress-slider::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
-  box-shadow: 0 3px 10px rgba(0, 123, 255, 0.5);
+  transform: scale(1.1);
+  box-shadow: 0 2px 8px rgba(0, 123, 255, 0.5);
 }
 
 .progress-slider::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: #007bff;
   cursor: pointer;
-  border: 3px solid white;
-  box-shadow: 0 2px 6px rgba(0, 123, 255, 0.3);
+  border: 2px solid white;
+  box-shadow: 0 1px 4px rgba(0, 123, 255, 0.3);
   transition: all 0.2s ease;
 }
 
 .progress-slider::-moz-range-thumb:hover {
-  transform: scale(1.2);
+  transform: scale(1.1);
 }
 
 .volume-container {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .volume-icon {
-  font-size: 16px;
+  font-size: 12px;
   color: #28a745;
 }
 
 .volume-slider {
-  width: 70px;
-  height: 4px;
+  width: 50px;
+  height: 3px;
   background: #e9ecef;
   border-radius: 2px;
   appearance: none;
@@ -987,69 +1013,71 @@
 
 .volume-slider::-webkit-slider-thumb {
   appearance: none;
-  width: 12px;
-  height: 12px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: #28a745;
   cursor: pointer;
-  border: 2px solid white;
-  box-shadow: 0 1px 4px rgba(40, 167, 69, 0.3);
+  border: 1px solid white;
+  box-shadow: 0 1px 3px rgba(40, 167, 69, 0.3);
   transition: all 0.2s ease;
 }
 
 .volume-slider::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
-  box-shadow: 0 2px 6px rgba(40, 167, 69, 0.5);
+  transform: scale(1.1);
+  box-shadow: 0 1px 6px rgba(40, 167, 69, 0.5);
 }
 
 .volume-slider::-moz-range-thumb {
-  width: 12px;
-  height: 12px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: #28a745;
   cursor: pointer;
-  border: 2px solid white;
-  box-shadow: 0 1px 4px rgba(40, 167, 69, 0.3);
+  border: 1px solid white;
+  box-shadow: 0 1px 3px rgba(40, 167, 69, 0.3);
 }
 
 /* 播放器列的樣式 */
 .audio-player-cell {
-  padding: 12px !important;
+  padding: 8px !important;
   vertical-align: middle;
-  min-width: 240px;
+  min-width: 300px;
 }
 
 /* 響應式設計 */
 @media (max-width: 1024px) {
   .audio-player {
-    min-width: 200px;
-    padding: 10px;
+    min-width: 260px;
+    gap: 10px;
   }
   
   .audio-player-cell {
-    min-width: 220px;
+    min-width: 280px;
+  }
+  
+  .volume-slider {
+    width: 40px;
   }
 }
 
 @media (max-width: 768px) {
   .audio-player {
-    min-width: 180px;
-    padding: 8px;
-    gap: 6px;
-  }
-  
-  .player-controls {
+    min-width: 220px;
     gap: 8px;
+    padding: 6px 10px;
+    height: 44px;
   }
   
   .play-button {
-    width: 36px;
-    height: 36px;
-    font-size: 16px;
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
   }
   
   .time-info {
-    font-size: 11px;
+    font-size: 10px;
+    min-width: 50px;
   }
   
   .volume-container {
@@ -1057,8 +1085,8 @@
   }
   
   .audio-player-cell {
-    min-width: 200px;
-    padding: 8px !important;
+    min-width: 240px;
+    padding: 6px !important;
   }
   
   /* 手機版表格滾動 */
@@ -1069,35 +1097,43 @@
 
 @media (max-width: 480px) {
   .audio-player {
-    min-width: 160px;
-    padding: 6px;
+    min-width: 200px;
+    gap: 6px;
+    padding: 5px 8px;
+    height: 40px;
   }
   
   .play-button {
-    width: 32px;
-    height: 32px;
-    font-size: 14px;
+    width: 26px;
+    height: 26px;
+    font-size: 11px;
   }
   
   .time-info {
-    font-size: 10px;
+    font-size: 9px;
+    min-width: 45px;
   }
   
   .audio-player-cell {
-    min-width: 180px;
+    min-width: 220px;
   }
 }
 
 /* 深色主題下的音頻播放器 */
 @media (prefers-color-scheme: dark) {
   .audio-player {
-    background: #343a40;
-    border-color: #495057;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    background: linear-gradient(135deg, #343a40 0%, #495057 100%);
+    border-color: #6c757d;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  }
+  
+  .audio-player::before {
+    background: linear-gradient(90deg, rgba(77, 171, 247, 0.1) 0%, transparent 100%);
   }
   
   .audio-player:hover {
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 4px 20px rgba(77, 171, 247, 0.2);
+    border-color: rgba(77, 171, 247, 0.4);
   }
   
   .time-info {
@@ -1113,7 +1149,7 @@
   }
   
   .progress-slider, .volume-slider {
-    background: #495057;
+    background: #6c757d;
   }
   
   .volume-icon {
@@ -1121,21 +1157,21 @@
   }
 }
 
-/* 播放器動畫效果 */
-@keyframes pulse-play {
+/* 播放器動畫效果 - 更subtle */
+@keyframes pulse-play-subtle {
   0% {
-    box-shadow: 0 2px 8px rgba(0, 123, 255, 0.3);
+    box-shadow: 0 2px 6px rgba(0, 123, 255, 0.3);
   }
   50% {
-    box-shadow: 0 4px 16px rgba(0, 123, 255, 0.6);
+    box-shadow: 0 3px 10px rgba(0, 123, 255, 0.5);
   }
   100% {
-    box-shadow: 0 2px 8px rgba(0, 123, 255, 0.3);
+    box-shadow: 0 2px 6px rgba(0, 123, 255, 0.3);
   }
 }
 
 .play-button:not(:disabled) {
-  animation: pulse-play 2s infinite;
+  animation: pulse-play-subtle 3s infinite;
 }
 
 /* 播放狀態指示器 */
