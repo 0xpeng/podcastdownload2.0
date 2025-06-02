@@ -1,5 +1,139 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import './App.css';
+
+// 時長格式化函數
+const formatDuration = (duration: string | number): string => {
+  // 如果已經是 MM:SS 格式，直接返回
+  if (typeof duration === 'string' && duration.includes(':')) {
+    return duration;
+  }
+  
+  // 如果是秒數，轉換為 MM:SS
+  const totalSeconds = typeof duration === 'string' ? parseInt(duration) : duration;
+  if (isNaN(totalSeconds)) return '00:00';
+  
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+};
+
+// 音頻播放器組件
+interface AudioPlayerProps {
+  episode: Episode;
+  isPlaying: boolean;
+  onTogglePlay: () => void;
+}
+
+const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onTogglePlay }) => {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [totalDuration, setTotalDuration] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [volume, setVolume] = useState(1);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const updateTime = () => setCurrentTime(audio.currentTime);
+    const updateDuration = () => setTotalDuration(audio.duration);
+    const handleLoadStart = () => setIsLoading(true);
+    const handleCanPlay = () => setIsLoading(false);
+
+    audio.addEventListener('timeupdate', updateTime);
+    audio.addEventListener('loadedmetadata', updateDuration);
+    audio.addEventListener('loadstart', handleLoadStart);
+    audio.addEventListener('canplay', handleCanPlay);
+
+    return () => {
+      audio.removeEventListener('timeupdate', updateTime);
+      audio.removeEventListener('loadedmetadata', updateDuration);
+      audio.removeEventListener('loadstart', handleLoadStart);
+      audio.removeEventListener('canplay', handleCanPlay);
+    };
+  }, [episode.audioUrl]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (isPlaying) {
+      audio.play().catch(console.error);
+    } else {
+      audio.pause();
+    }
+  }, [isPlaying]);
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    
+    const newTime = (parseFloat(e.target.value) / 100) * totalDuration;
+    audio.currentTime = newTime;
+    setCurrentTime(newTime);
+  };
+
+  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newVolume = parseFloat(e.target.value) / 100;
+    setVolume(newVolume);
+    if (audioRef.current) {
+      audioRef.current.volume = newVolume;
+    }
+  };
+
+  const progressPercentage = totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0;
+
+  return (
+    <div className="audio-player">
+      <audio
+        ref={audioRef}
+        src={episode.audioUrl}
+        preload="metadata"
+      />
+      
+      <div className="player-controls">
+        <button
+          onClick={onTogglePlay}
+          disabled={!episode.audioUrl || isLoading}
+          className="play-button"
+          title={isPlaying ? '暫停' : '播放'}
+        >
+          {isLoading ? '⏳' : isPlaying ? '⏸️' : '▶️'}
+        </button>
+        
+        <div className="time-info">
+          <span className="current-time">{formatDuration(Math.floor(currentTime))}</span>
+          <span className="time-separator">/</span>
+          <span className="total-time">{formatDuration(Math.floor(totalDuration))}</span>
+        </div>
+      </div>
+
+      <div className="progress-container">
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={progressPercentage}
+          onChange={handleSeek}
+          className="progress-slider"
+          disabled={!totalDuration}
+        />
+      </div>
+
+      <div className="volume-container">
+        <span className="volume-icon">🔊</span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={volume * 100}
+          onChange={handleVolumeChange}
+          className="volume-slider"
+        />
+      </div>
+    </div>
+  );
+};
 
 interface Episode {
   id: string;
@@ -79,6 +213,9 @@ function App() {
   });
   const [showTranscriptionSettings, setShowTranscriptionSettings] = useState(false);
   
+  // 新增：音頻播放器狀態
+  const [currentlyPlaying, setCurrentlyPlaying] = useState<string | null>(null);
+  
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // 新增：更新轉錄設置
@@ -87,6 +224,15 @@ function App() {
       ...prev,
       [key]: value
     }));
+  };
+
+  // 新增：音頻播放控制函數
+  const handleTogglePlay = (episodeId: string) => {
+    if (currentlyPlaying === episodeId) {
+      setCurrentlyPlaying(null); // 暫停當前播放
+    } else {
+      setCurrentlyPlaying(episodeId); // 播放新的集數
+    }
   };
 
   // 增強版轉錄功能
@@ -1096,6 +1242,7 @@ function App() {
                     <th>發布日期</th>
                     <th>時長</th>
                     <th>音檔連結</th>
+                    <th>播放器</th>
                     <th>轉錄狀態</th>
                     <th>操作</th>
                   </tr>
@@ -1112,7 +1259,7 @@ function App() {
                       </td>
                       <td className="episode-title">{episode.title}</td>
                       <td>{episode.pubDate}</td>
-                      <td>{episode.duration}</td>
+                      <td>{formatDuration(episode.duration)}</td>
                       <td className="audio-url">
                         {episode.audioUrl ? (
                           <div className="audio-link-container">
@@ -1134,6 +1281,15 @@ function App() {
                           </div>
                         ) : (
                           <span className="no-link">無連結</span>
+                        )}
+                      </td>
+                      <td className="audio-player-cell">
+                        {episode.audioUrl && (
+                          <AudioPlayer
+                            episode={episode}
+                            isPlaying={currentlyPlaying === episode.id}
+                            onTogglePlay={() => handleTogglePlay(episode.id)}
+                          />
                         )}
                       </td>
                       <td>
