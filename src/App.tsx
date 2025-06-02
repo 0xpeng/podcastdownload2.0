@@ -28,45 +28,78 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
   const audioRef = useRef<HTMLAudioElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [totalDuration, setTotalDuration] = useState(0);
-  const [isLoading, setIsLoading] = useState(false);
   const [volume, setVolume] = useState(1);
+  const [isLoading, setIsLoading] = useState(false);
+  const [hasError, setHasError] = useState(false);
+
+  // 檢查音頻URL是否有效
+  const isValidAudioUrl = (url: string): boolean => {
+    if (!url || url.trim() === '') return false;
+    try {
+      new URL(url);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const audioUrl = episode.audioUrl;
+  const isAudioValid = isValidAudioUrl(audioUrl);
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || !isAudioValid) return;
 
+    // 重置錯誤狀態
+    setHasError(false);
+    
     const updateTime = () => setCurrentTime(audio.currentTime);
-    const updateDuration = () => setTotalDuration(audio.duration);
+    const updateDuration = () => setTotalDuration(audio.duration || 0);
     const handleLoadStart = () => setIsLoading(true);
-    const handleCanPlay = () => setIsLoading(false);
+    const handleCanPlay = () => {
+      setIsLoading(false);
+      setHasError(false);
+    };
+    const handleLoadedMetadata = () => {
+      setTotalDuration(audio.duration || 0);
+    };
+    const handleError = (e: Event) => {
+      console.error('音頻加載錯誤:', e);
+      setIsLoading(false);
+      setHasError(true);
+    };
 
     audio.addEventListener('timeupdate', updateTime);
-    audio.addEventListener('loadedmetadata', updateDuration);
+    audio.addEventListener('durationchange', updateDuration);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('loadstart', handleLoadStart);
     audio.addEventListener('canplay', handleCanPlay);
+    audio.addEventListener('error', handleError);
 
-    return () => {
-      audio.removeEventListener('timeupdate', updateTime);
-      audio.removeEventListener('loadedmetadata', updateDuration);
-      audio.removeEventListener('loadstart', handleLoadStart);
-      audio.removeEventListener('canplay', handleCanPlay);
-    };
-  }, [episode.audioUrl]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
+    // 如果正在播放，開始播放
     if (isPlaying) {
-      audio.play().catch(console.error);
+      audio.play().catch(error => {
+        console.error('播放失敗:', error);
+        setHasError(true);
+        setIsLoading(false);
+      });
     } else {
       audio.pause();
     }
-  }, [isPlaying]);
+
+    return () => {
+      audio.removeEventListener('timeupdate', updateTime);
+      audio.removeEventListener('durationchange', updateDuration);
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.removeEventListener('loadstart', handleLoadStart);
+      audio.removeEventListener('canplay', handleCanPlay);
+      audio.removeEventListener('error', handleError);
+    };
+  }, [isPlaying, audioUrl, isAudioValid]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || !totalDuration) return;
     
     const newTime = (parseFloat(e.target.value) / 100) * totalDuration;
     audio.currentTime = newTime;
@@ -83,22 +116,31 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
 
   const progressPercentage = totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0;
 
+  // 確定播放按鈕的狀態
+  const isButtonDisabled = !isAudioValid || isLoading || hasError;
+  const buttonTitle = hasError ? '音頻加載失敗' : 
+                     !isAudioValid ? '無效的音頻連結' :
+                     isLoading ? '正在加載...' :
+                     isPlaying ? '暫停' : '播放';
+
   return (
-    <div className="audio-player">
+    <div className={`audio-player ${isPlaying ? 'playing' : ''}`}>
       <audio
         ref={audioRef}
-        src={episode.audioUrl}
+        src={isAudioValid ? audioUrl : undefined}
         preload="metadata"
       />
       
       <div className="player-controls">
         <button
           onClick={onTogglePlay}
-          disabled={!episode.audioUrl || isLoading}
+          disabled={isButtonDisabled}
           className="play-button"
-          title={isPlaying ? '暫停' : '播放'}
+          title={buttonTitle}
         >
-          {isLoading ? '⏳' : isPlaying ? '⏸️' : '▶️'}
+          {hasError ? '❌' : 
+           isLoading ? '⏳' : 
+           isPlaying ? '⏸️' : '▶️'}
         </button>
         
         <div className="time-info">
@@ -116,7 +158,7 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
           value={progressPercentage}
           onChange={handleSeek}
           className="progress-slider"
-          disabled={!totalDuration}
+          disabled={!totalDuration || hasError}
         />
       </div>
 
@@ -129,6 +171,7 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
           value={volume * 100}
           onChange={handleVolumeChange}
           className="volume-slider"
+          disabled={hasError}
         />
       </div>
     </div>
