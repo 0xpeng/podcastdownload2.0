@@ -33,6 +33,7 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
   const [hasError, setHasError] = useState(false);
   const [blobUrl, setBlobUrl] = useState<string>('');
   const [retryCount, setRetryCount] = useState(0);
+  const [errorMessage, setErrorMessage] = useState<string>('');
 
   // 檢查音頻URL是否有效
   const isValidAudioUrl = (url: string): boolean => {
@@ -48,9 +49,10 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
   const audioUrl = episode.audioUrl;
   const isAudioValid = isValidAudioUrl(audioUrl);
 
-  // 使用後端代理載入音頻 (與下載功能相同的API)
+  // 使用後端代理載入音頻 (優先方法，與下載功能相同的API)
   const loadAudioWithBackendProxy = async (): Promise<string> => {
-    console.log(`🎵 使用後端代理載入音頻: ${episode.title}`);
+    console.log(`🎵 [後端代理] 開始載入音頻: ${episode.title}`);
+    console.log(`🎵 [後端代理] 音頻URL: ${audioUrl}`);
     
     try {
       // 使用與下載相同的後端代理 API
@@ -65,46 +67,69 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
         }),
       });
 
+      console.log(`🎵 [後端代理] 響應狀態: ${response.status} ${response.statusText}`);
+
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`🚨 [後端代理] 詳細錯誤: ${errorText}`);
         throw new Error(`後端代理錯誤 (${response.status}): ${response.statusText}`);
       }
 
       const audioBlob = await response.blob();
-      console.log(`✅ 音頻載入成功: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
+      console.log(`✅ [後端代理] 音頻載入成功: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
       
+      // 驗證 Blob 是否為有效的音頻類型
+      if (audioBlob.size < 1024) {
+        throw new Error('後端返回的音頻文件太小，可能無效');
+      }
+
       // 創建 Blob URL
       const blobUrl = URL.createObjectURL(audioBlob);
+      console.log(`🔗 [後端代理] 創建 Blob URL: ${blobUrl.substring(0, 50)}...`);
       return blobUrl;
       
     } catch (error) {
-      console.error('後端代理載入失敗:', error);
+      console.error('🚨 [後端代理] 載入失敗:', error);
       throw error;
     }
   };
 
-  // 備用方案：使用前端 CORS 代理
+  // 備用方案：使用前端 CORS 代理 (僅作為備用)
   const loadAudioWithFrontendProxy = async (): Promise<string> => {
-    console.log(`🌐 使用前端代理載入音頻: ${episode.title}`);
+    console.log(`🌐 [前端代理] 開始載入音頻: ${episode.title}`);
     
+    // 移除失效的代理，只保留相對可靠的
     const corsProxies = [
       'https://corsproxy.io/?',
-      'https://cors.bridged.cc/',
-      'https://proxy.cors.sh/',
+      // 移除其他不穩定的代理
     ];
     
     for (const proxy of corsProxies) {
       try {
         const testUrl = proxy + encodeURIComponent(audioUrl);
-        console.log(`嘗試前端代理: ${proxy}`);
+        console.log(`🌐 [前端代理] 嘗試代理: ${proxy}`);
         
-        const response = await fetch(testUrl);
+        const response = await fetch(testUrl, {
+          method: 'GET',
+          headers: {
+            'Accept': 'audio/*,*/*',
+            'User-Agent': 'Mozilla/5.0 (compatible; PodcastPlayer/1.0)'
+          }
+        });
+        
         if (response.ok) {
           const audioBlob = await response.blob();
-          console.log(`✅ 前端代理成功: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
-          return URL.createObjectURL(audioBlob);
+          if (audioBlob.size > 1024) {
+            console.log(`✅ [前端代理] 成功: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
+            return URL.createObjectURL(audioBlob);
+          } else {
+            console.warn(`⚠️ [前端代理] 文件太小: ${audioBlob.size}B`);
+          }
+        } else {
+          console.warn(`⚠️ [前端代理] HTTP錯誤: ${response.status}`);
         }
       } catch (error) {
-        console.log(`前端代理失敗 (${proxy}):`, error);
+        console.log(`❌ [前端代理] 失敗 (${proxy}):`, error);
         continue;
       }
     }
@@ -112,12 +137,16 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
     throw new Error('所有前端代理都失敗');
   };
 
-  // 載入音頻
+  // 載入音頻 - 修改優先級邏輯
   const loadAudio = async () => {
-    if (!isAudioValid) return;
+    if (!isAudioValid) {
+      setErrorMessage('無效的音頻連結');
+      return;
+    }
     
     setIsLoading(true);
     setHasError(false);
+    setErrorMessage('');
     
     // 清理舊的 Blob URL
     if (blobUrl) {
@@ -128,34 +157,57 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
     try {
       let newBlobUrl: string;
       
-      // 優先使用後端代理 (與下載功能相同)
+      console.log(`🎯 [音頻載入] 開始載入: ${episode.title}`);
+      
+      // 1. 優先使用後端代理 (與下載功能相同，最可靠)
       try {
+        console.log(`📡 [載入策略] 嘗試後端代理...`);
         newBlobUrl = await loadAudioWithBackendProxy();
+        console.log(`✅ [載入策略] 後端代理成功`);
       } catch (backendError) {
-        console.warn('後端代理失敗，嘗試前端代理:', backendError);
-        newBlobUrl = await loadAudioWithFrontendProxy();
+        console.warn('⚠️ [載入策略] 後端代理失敗，嘗試前端代理:', backendError);
+        
+        // 2. 備用方案：使用前端代理
+        try {
+          console.log(`🌐 [載入策略] 嘗試前端代理...`);
+          newBlobUrl = await loadAudioWithFrontendProxy();
+          console.log(`✅ [載入策略] 前端代理成功`);
+        } catch (frontendError) {
+          console.error('❌ [載入策略] 前端代理也失敗:', frontendError);
+          
+          // 記錄詳細錯誤信息
+          const backendMsg = backendError instanceof Error ? backendError.message : String(backendError);
+          const frontendMsg = frontendError instanceof Error ? frontendError.message : String(frontendError);
+          const detailedError = `音頻載入完全失敗:\n- 後端代理: ${backendMsg}\n- 前端代理: ${frontendMsg}`;
+          setErrorMessage(detailedError);
+          throw new Error(detailedError);
+        }
       }
       
       setBlobUrl(newBlobUrl);
       setIsLoading(false);
-      console.log(`🎯 音頻載入完成: ${episode.title}`);
+      console.log(`🎯 [音頻載入] 載入完成: ${episode.title}`);
       
     } catch (error) {
-      console.error(`❌ 所有音頻載入方法都失敗: ${episode.title}`, error);
+      console.error(`❌ [音頻載入] 完全失敗: ${episode.title}`, error);
       setHasError(true);
       setIsLoading(false);
+      setErrorMessage(error instanceof Error ? error.message : String(error));
     }
   };
 
   // 重試機制
   const handleRetry = () => {
-    setRetryCount(prev => prev + 1);
+    const newRetryCount = retryCount + 1;
+    setRetryCount(newRetryCount);
+    console.log(`🔄 [重試] 第 ${newRetryCount} 次重試: ${episode.title}`);
     loadAudio();
   };
 
   // 當音頻URL變化時載入音頻
   useEffect(() => {
     if (isAudioValid) {
+      console.log(`🎬 [生命週期] 音頻URL變化，開始載入: ${episode.title}`);
       loadAudio();
     }
     
@@ -172,22 +224,22 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
     const audio = audioRef.current;
     if (!audio || !blobUrl) return;
 
-    console.log(`🔗 設置音頻源: ${blobUrl.substring(0, 50)}...`);
+    console.log(`🔗 [音頻設置] 設置音頻源: ${blobUrl.substring(0, 50)}...`);
     
     const updateTime = () => setCurrentTime(audio.currentTime);
     const updateDuration = () => setTotalDuration(audio.duration || 0);
     const handleLoadStart = () => {
-      console.log('🔄 音頻開始載入...');
+      console.log('🔄 [音頻事件] 開始載入...');
     };
     const handleCanPlay = () => {
-      console.log('✅ 音頻可以播放');
+      console.log('✅ [音頻事件] 可以播放');
     };
     const handleLoadedMetadata = () => {
       setTotalDuration(audio.duration || 0);
-      console.log(`⏱️ 音頻時長: ${audio.duration}秒`);
+      console.log(`⏱️ [音頻事件] 時長: ${audio.duration}秒`);
     };
     const handleError = (e: Event) => {
-      console.error('🚨 音頻播放錯誤:', e);
+      console.error('🚨 [音頻事件] 播放錯誤:', e);
       if (audio.error) {
         const errorMessages = {
           1: 'MEDIA_ERR_ABORTED - 音頻下載被中止',
@@ -196,7 +248,8 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
           4: 'MEDIA_ERR_SRC_NOT_SUPPORTED - 音頻格式不支援'
         };
         const errorMsg = errorMessages[audio.error.code as keyof typeof errorMessages] || `未知錯誤 (${audio.error.code})`;
-        console.error(`錯誤詳情: ${errorMsg}`);
+        console.error(`🚨 [音頻事件] 錯誤詳情: ${errorMsg}`);
+        setErrorMessage(`播放錯誤: ${errorMsg}`);
       }
       setHasError(true);
     };
@@ -227,11 +280,14 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
     if (!audio || !blobUrl || hasError) return;
 
     if (isPlaying) {
+      console.log(`▶️ [播放控制] 開始播放: ${episode.title}`);
       audio.play().catch(error => {
-        console.error('播放失敗:', error);
+        console.error('🚨 [播放控制] 播放失敗:', error);
         setHasError(true);
+        setErrorMessage(`播放失敗: ${error.message}`);
       });
     } else {
+      console.log(`⏸️ [播放控制] 暫停播放: ${episode.title}`);
       audio.pause();
     }
   }, [isPlaying, blobUrl, hasError]);
@@ -257,7 +313,7 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
 
   // 確定播放按鈕的狀態
   const isButtonDisabled = !isAudioValid || isLoading;
-  const buttonTitle = hasError ? `音頻載入失敗 (重試 ${retryCount} 次) - 點擊重試` : 
+  const buttonTitle = hasError ? `音頻載入失敗 (重試 ${retryCount} 次) - 點擊重試\n${errorMessage}` : 
                      !isAudioValid ? '無效的音頻連結' :
                      isLoading ? '正在載入音頻...' :
                      !blobUrl ? '準備載入...' :
@@ -275,7 +331,7 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
           onClick={hasError ? handleRetry : onTogglePlay}
           disabled={isButtonDisabled}
           className="play-button"
-          title={hasError ? '點擊重試' : buttonTitle}
+          title={buttonTitle}
         >
           {hasError ? '🔄' : 
            isLoading ? '⏳' : 
@@ -426,11 +482,10 @@ function App() {
   const testAudioUrl = async (episode: Episode): Promise<'valid' | 'invalid'> => {
     if (!episode.audioUrl) return 'invalid';
     
+    // 更新代理列表，移除失效的代理
     const corsProxies = [
-      '', // 直接請求
       'https://corsproxy.io/?',
-      'https://cors.bridged.cc/',
-      'https://proxy.cors.sh/',
+      // 移除失效的代理：cors.bridged.cc, proxy.cors.sh, cors-anywhere.herokuapp.com
     ];
     
     for (const proxy of corsProxies) {
@@ -960,11 +1015,8 @@ function App() {
     try {
       // 更新的CORS代理列表 - 移除不工作的代理
       const corsProxies = [
-        '', // 先嘗試直接請求
         'https://corsproxy.io/?',
-        'https://cors.bridged.cc/',
-        'https://proxy.cors.sh/',
-        'https://cors-anywhere.herokuapp.com/',
+        // 移除失效的代理：cors.bridged.cc, proxy.cors.sh, cors-anywhere.herokuapp.com
       ];
 
       let response: Response | null = null;
@@ -1230,6 +1282,7 @@ function App() {
       
       let downloadSuccess = false;
       
+      // 首先嘗試直接下載
       try {
         console.log(`嘗試直接下載: ${episode.title}`);
         await downloadFile(episode.audioUrl, episode);
@@ -1239,6 +1292,7 @@ function App() {
         console.log(`直接下載失敗，嘗試使用代理: ${error}`);
       }
       
+      // 如果直接下載失敗，嘗試使用代理
       if (!downloadSuccess) {
         for (const proxy of corsProxies) {
           try {
