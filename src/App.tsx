@@ -478,11 +478,59 @@ function App() {
     }
   };
 
-  // 新增：測試單個音頻鏈接
+  // 新增：測試單個音頻鏈接 - 使用後端代理
   const testAudioUrl = async (episode: Episode): Promise<'valid' | 'invalid'> => {
     if (!episode.audioUrl) return 'invalid';
     
-    // 更新代理列表，移除失效的代理
+    console.log(`🔍 [音頻測試] 開始測試: ${episode.title}`);
+    console.log(`🔍 [音頻測試] 音頻URL: ${episode.audioUrl}`);
+    
+    try {
+      // 優先使用後端代理進行測試（與播放器相同的方法）
+      console.log(`🔍 [音頻測試] 使用後端代理測試...`);
+      
+      const response = await fetch('/api/download', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          audioUrl: episode.audioUrl,
+          title: `test_${episode.title}`
+        }),
+        signal: AbortSignal.timeout(15000), // 15秒超時
+      });
+
+      if (response.ok) {
+        const contentLength = response.headers.get('content-length');
+        const contentType = response.headers.get('content-type') || '';
+        
+        // 檢查是否為音頻文件
+        const isAudioType = contentType.includes('audio') || 
+                           contentType.includes('mp3') || 
+                           contentType.includes('mp4') ||
+                           contentType.includes('mpeg') ||
+                           contentType.includes('m4a') ||
+                           contentType.includes('wav') ||
+                           contentType.includes('ogg');
+        
+        if (isAudioType) {
+          const sizeMB = contentLength ? (parseInt(contentLength) / 1024 / 1024).toFixed(2) : '未知';
+          console.log(`✅ [音頻測試] 後端代理測試成功: ${episode.title} - ${sizeMB}MB - ${contentType}`);
+          return 'valid';
+        } else {
+          console.warn(`⚠️ [音頻測試] 響應成功但不是音頻: ${episode.title} - ${contentType}`);
+        }
+      } else {
+        console.warn(`⚠️ [音頻測試] 後端代理測試失敗: ${response.status} ${response.statusText}`);
+      }
+    } catch (error) {
+      console.log(`❌ [音頻測試] 後端代理測試失敗: ${episode.title} - ${error}`);
+    }
+    
+    // 如果後端代理失敗，回退到前端代理測試（僅作為備用）
+    console.log(`🌐 [音頻測試] 回退到前端代理測試...`);
+    
     const corsProxies = [
       'https://corsproxy.io/?',
       // 移除失效的代理：cors.bridged.cc, proxy.cors.sh, cors-anywhere.herokuapp.com
@@ -490,7 +538,7 @@ function App() {
     
     for (const proxy of corsProxies) {
       try {
-        const testUrl = proxy ? proxy + encodeURIComponent(episode.audioUrl) : episode.audioUrl;
+        const testUrl = proxy + encodeURIComponent(episode.audioUrl);
         
         // 首先嘗試HEAD請求測試，避免下載整個文件
         let response: Response;
@@ -501,7 +549,7 @@ function App() {
           });
         } catch (headError) {
           // 如果HEAD請求失敗，嘗試GET請求但只讀取少量數據
-          console.log(`HEAD請求失敗，嘗試部分GET請求: ${episode.title}`);
+          console.log(`🔍 [音頻測試] HEAD請求失敗，嘗試部分GET: ${episode.title}`);
           response = await fetch(testUrl, {
             method: 'GET',
             headers: {
@@ -528,19 +576,19 @@ function App() {
           const hasReasonableSize = !contentLength || parseInt(contentLength) > 10000; // 至少10KB
           
           if (isAudioType && hasReasonableSize) {
-            console.log(`✅ 音頻測試成功: ${episode.title} (使用${proxy || '直接請求'}) - ${contentType}`);
+            console.log(`✅ [音頻測試] 前端代理測試成功: ${episode.title} (使用${proxy}) - ${contentType}`);
             return 'valid';
           } else {
-            console.log(`⚠️ 響應成功但不是音頻: ${episode.title} - ${contentType}, ${contentLength} bytes`);
+            console.log(`⚠️ [音頻測試] 響應成功但不是音頻: ${episode.title} - ${contentType}, ${contentLength} bytes`);
           }
         }
       } catch (error) {
-        console.log(`❌ 音頻測試失敗: ${episode.title} (${proxy || '直接請求'}) - ${error}`);
+        console.log(`❌ [音頻測試] 前端代理測試失敗: ${episode.title} (${proxy}) - ${error}`);
         continue;
       }
     }
     
-    console.log(`❌ 所有方法都失敗: ${episode.title}`);
+    console.log(`❌ [音頻測試] 所有方法都失敗: ${episode.title}`);
     return 'invalid';
   };
 
