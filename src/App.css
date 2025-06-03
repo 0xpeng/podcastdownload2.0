@@ -350,6 +350,12 @@
 /* 音檔連結樣式 */
 .audio-link-container {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.audio-link-main {
+  display: flex;
   align-items: center;
   gap: 8px;
 }
@@ -372,7 +378,6 @@
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
-  margin-left: 8px;
   box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
   transition: all 0.3s ease;
 }
@@ -386,6 +391,133 @@
 .no-link {
   color: #999;
   font-size: 12px;
+}
+
+/* 音頻測試狀態樣式 */
+.audio-test-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.test-status {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-weight: bold;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.test-status.testing {
+  background: linear-gradient(135deg, #ffc107 0%, #ff8f00 100%);
+  color: #1a1a1a;
+  animation: pulse-testing 1.5s infinite;
+}
+
+.test-status.valid {
+  background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+  color: white;
+  text-shadow: 0 0 5px rgba(40, 167, 69, 0.5);
+}
+
+.test-status.invalid {
+  background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+  color: white;
+  text-shadow: 0 0 5px rgba(220, 53, 69, 0.5);
+}
+
+.test-single-button {
+  background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
+  color: white;
+  border: none;
+  padding: 2px 6px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: bold;
+  box-shadow: 0 1px 4px rgba(23, 162, 184, 0.3);
+  transition: all 0.3s ease;
+}
+
+.test-single-button:hover {
+  background: linear-gradient(135deg, #138496 0%, #117a8b 100%);
+  box-shadow: 0 2px 8px rgba(23, 162, 184, 0.4);
+  transform: translateY(-1px);
+}
+
+/* 測試按鈕樣式 */
+.test-button {
+  background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+  box-shadow: 0 4px 15px rgba(23, 162, 184, 0.3);
+  transition: all 0.3s ease;
+}
+
+.test-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, #138496 0%, #117a8b 100%);
+  box-shadow: 0 6px 20px rgba(23, 162, 184, 0.4);
+  transform: translateY(-2px);
+}
+
+.test-button:disabled {
+  background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+  color: #a0aec0;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+.select-valid-button {
+  background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+  box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+  transition: all 0.3s ease;
+}
+
+.select-valid-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, #218838 0%, #1e7e34 100%);
+  box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4);
+  transform: translateY(-2px);
+}
+
+.select-valid-button:disabled {
+  background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+  color: #a0aec0;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+/* 測試動畫 */
+@keyframes pulse-testing {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 /* 操作按鈕容器 */

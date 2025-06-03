@@ -111,15 +111,41 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
       console.log(`音頻時長: ${audio.duration}秒`);
     };
     const handleError = (e: Event) => {
-      console.error('音頻加載錯誤:', e);
+      const audio = audioRef.current;
+      const currentProxy = audioProxies[proxyIndex] || '直接請求';
+      
+      console.error(`音頻加載錯誤 (${currentProxy}):`, e);
+      
+      // 獲取更詳細的錯誤信息
+      if (audio) {
+        console.error('音頻錯誤詳情:', {
+          networkState: audio.networkState,
+          readyState: audio.readyState,
+          error: audio.error,
+          src: audio.src.substring(0, 100) + '...'
+        });
+        
+        // 根據錯誤類型提供更具體的信息
+        if (audio.error) {
+          const errorMessages = {
+            1: 'MEDIA_ERR_ABORTED - 音頻下載被中止',
+            2: 'MEDIA_ERR_NETWORK - 網絡錯誤，無法下載音頻',
+            3: 'MEDIA_ERR_DECODE - 音頻解碼錯誤，文件可能已損壞',
+            4: 'MEDIA_ERR_SRC_NOT_SUPPORTED - 音頻格式不支援或URL無效'
+          };
+          const errorMsg = errorMessages[audio.error.code as keyof typeof errorMessages] || `未知錯誤 (${audio.error.code})`;
+          console.error(`音頻錯誤代碼: ${errorMsg}`);
+        }
+      }
+      
       setIsLoading(false);
       
       // 嘗試使用下一個代理
       if (tryNextProxy()) {
-        console.log('嘗試使用下一個代理...');
+        console.log(`嘗試使用下一個代理: ${audioProxies[proxyIndex + 1] || '直接請求'}`);
         return; // 不設置錯誤狀態，讓useEffect重新運行
       } else {
-        console.error('所有代理都失敗了');
+        console.error(`所有代理都失敗了 (${audioProxies.length}個方法)。音頻URL可能無效: ${audioUrl.substring(0, 100)}...`);
         setHasError(true);
       }
     };
@@ -329,6 +355,10 @@ function App() {
   // 新增：音頻播放器狀態
   const [currentlyPlaying, setCurrentlyPlaying] = useState<string | null>(null);
   
+  // 新增：音頻測試狀態
+  const [testingAudio, setTestingAudio] = useState(false);
+  const [audioTestResults, setAudioTestResults] = useState<Map<string, 'testing' | 'valid' | 'invalid'>>(new Map());
+  
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // 新增：更新轉錄設置
@@ -346,6 +376,137 @@ function App() {
     } else {
       setCurrentlyPlaying(episodeId); // 播放新的集數
     }
+  };
+
+  // 新增：測試單個音頻鏈接
+  const testAudioUrl = async (episode: Episode): Promise<'valid' | 'invalid'> => {
+    if (!episode.audioUrl) return 'invalid';
+    
+    const corsProxies = [
+      '', // 直接請求
+      'https://corsproxy.io/?',
+      'https://cors.bridged.cc/',
+      'https://proxy.cors.sh/',
+    ];
+    
+    for (const proxy of corsProxies) {
+      try {
+        const testUrl = proxy ? proxy + encodeURIComponent(episode.audioUrl) : episode.audioUrl;
+        
+        // 首先嘗試HEAD請求測試，避免下載整個文件
+        let response: Response;
+        try {
+          response = await fetch(testUrl, {
+            method: 'HEAD',
+            signal: AbortSignal.timeout(8000), // 8秒超時
+          });
+        } catch (headError) {
+          // 如果HEAD請求失敗，嘗試GET請求但只讀取少量數據
+          console.log(`HEAD請求失敗，嘗試部分GET請求: ${episode.title}`);
+          response = await fetch(testUrl, {
+            method: 'GET',
+            headers: {
+              'Range': 'bytes=0-1023' // 只請求前1KB數據
+            },
+            signal: AbortSignal.timeout(8000),
+          });
+        }
+        
+        if (response.ok || response.status === 206) { // 206是部分內容成功
+          const contentType = response.headers.get('content-type') || '';
+          const contentLength = response.headers.get('content-length');
+          
+          // 檢查是否為音頻文件
+          const isAudioType = contentType.includes('audio') || 
+                             contentType.includes('mp3') || 
+                             contentType.includes('mp4') ||
+                             contentType.includes('mpeg') ||
+                             contentType.includes('m4a') ||
+                             contentType.includes('wav') ||
+                             contentType.includes('ogg');
+          
+          // 檢查文件大小（音頻文件通常比較大）
+          const hasReasonableSize = !contentLength || parseInt(contentLength) > 10000; // 至少10KB
+          
+          if (isAudioType && hasReasonableSize) {
+            console.log(`✅ 音頻測試成功: ${episode.title} (使用${proxy || '直接請求'}) - ${contentType}`);
+            return 'valid';
+          } else {
+            console.log(`⚠️ 響應成功但不是音頻: ${episode.title} - ${contentType}, ${contentLength} bytes`);
+          }
+        }
+      } catch (error) {
+        console.log(`❌ 音頻測試失敗: ${episode.title} (${proxy || '直接請求'}) - ${error}`);
+        continue;
+      }
+    }
+    
+    console.log(`❌ 所有方法都失敗: ${episode.title}`);
+    return 'invalid';
+  };
+
+  // 新增：批量測試音頻鏈接
+  const handleTestAllAudio = async () => {
+    setTestingAudio(true);
+    setAudioTestResults(new Map());
+    
+    console.log(`開始測試 ${episodes.length} 個音頻鏈接...`);
+    
+    const results = new Map<string, 'testing' | 'valid' | 'invalid'>();
+    
+    // 並行測試所有音頻（限制並發數量）
+    const batchSize = 3; // 每次測試3個，避免請求過多
+    
+    for (let i = 0; i < episodes.length; i += batchSize) {
+      const batch = episodes.slice(i, i + batchSize);
+      
+      // 設置為測試中狀態
+      batch.forEach(episode => {
+        results.set(episode.id, 'testing');
+      });
+      setAudioTestResults(new Map(results));
+      
+      // 並行測試這一批
+      const batchPromises = batch.map(async (episode) => {
+        const result = await testAudioUrl(episode);
+        results.set(episode.id, result);
+        setAudioTestResults(new Map(results)); // 實時更新結果
+        return { episode, result };
+      });
+      
+      await Promise.all(batchPromises);
+      
+      // 在批次間稍作延遲
+      if (i + batchSize < episodes.length) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    
+    setTestingAudio(false);
+    
+    // 統計結果
+    const validCount = Array.from(results.values()).filter(r => r === 'valid').length;
+    const invalidCount = Array.from(results.values()).filter(r => r === 'invalid').length;
+    
+    console.log(`音頻測試完成: ${validCount}個有效, ${invalidCount}個無效`);
+    alert(`音頻鏈接測試完成！\n\n✅ 有效: ${validCount}個\n❌ 無效: ${invalidCount}個\n\n建議只選擇有效的音頻進行下載或轉錄。`);
+  };
+
+  // 新增：測試單個音頻
+  const handleTestSingleAudio = async (episode: Episode) => {
+    const results = new Map(audioTestResults);
+    results.set(episode.id, 'testing');
+    setAudioTestResults(results);
+    
+    const result = await testAudioUrl(episode);
+    results.set(episode.id, result);
+    setAudioTestResults(results);
+    
+    const message = result === 'valid' 
+      ? `✅ "${episode.title}" 的音頻鏈接有效！` 
+      : `❌ "${episode.title}" 的音頻鏈接無效或無法訪問。`;
+    
+    alert(message);
   };
 
   // 增強版轉錄功能
@@ -1331,6 +1492,29 @@ function App() {
                 >
                   🎤 批量轉錄 ({selected.length})
                 </button>
+                
+                <button
+                  onClick={handleTestAllAudio}
+                  disabled={testingAudio || episodes.length === 0}
+                  className="test-button"
+                  title="測試所有音頻鏈接的有效性"
+                >
+                  {testingAudio ? '🔍 測試中...' : '🔍 測試音頻'}
+                </button>
+                
+                <button
+                  onClick={() => {
+                    const validIds = episodes
+                      .filter(ep => audioTestResults.get(ep.id) === 'valid')
+                      .map(ep => ep.id);
+                    setSelected(validIds);
+                  }}
+                  disabled={audioTestResults.size === 0}
+                  className="select-valid-button"
+                  title="選擇所有有效的音頻"
+                >
+                  ✅ 選擇有效音頻
+                </button>
               </div>
             </div>
 
@@ -1376,21 +1560,51 @@ function App() {
                       <td className="audio-url">
                         {episode.audioUrl ? (
                           <div className="audio-link-container">
-                            <a 
-                              href={episode.audioUrl} 
-                              target="_blank" 
-                              rel="noopener noreferrer"
-                              className="audio-link"
-                            >
-                              🔗 音檔連結
-                            </a>
-                            <button
-                              onClick={() => handleCopyLink(episode.audioUrl, episode.title)}
-                              className="copy-button"
-                              title="複製連結"
-                            >
-                              📋
-                            </button>
+                            <div className="audio-link-main">
+                              <a 
+                                href={episode.audioUrl} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="audio-link"
+                              >
+                                🔗 音檔連結
+                              </a>
+                              <button
+                                onClick={() => handleCopyLink(episode.audioUrl, episode.title)}
+                                className="copy-button"
+                                title="複製連結"
+                              >
+                                📋
+                              </button>
+                            </div>
+                            
+                            {/* 音頻測試結果指示器 */}
+                            <div className="audio-test-status">
+                              {audioTestResults.get(episode.id) === 'testing' && (
+                                <span className="test-status testing" title="測試中...">
+                                  🔍 測試中
+                                </span>
+                              )}
+                              {audioTestResults.get(episode.id) === 'valid' && (
+                                <span className="test-status valid" title="音頻鏈接有效">
+                                  ✅ 有效
+                                </span>
+                              )}
+                              {audioTestResults.get(episode.id) === 'invalid' && (
+                                <span className="test-status invalid" title="音頻鏈接無效">
+                                  ❌ 無效
+                                </span>
+                              )}
+                              {!audioTestResults.has(episode.id) && (
+                                <button
+                                  onClick={() => handleTestSingleAudio(episode)}
+                                  className="test-single-button"
+                                  title="測試此音頻鏈接"
+                                >
+                                  🔍 測試
+                                </button>
+                              )}
+                            </div>
                           </div>
                         ) : (
                           <span className="no-link">無連結</span>
