@@ -349,6 +349,35 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
                      !blobUrl ? '準備載入...' :
                      isPlaying ? '暫停' : '播放';
 
+  // 新增：调试按钮状态
+  console.log(`🎮 [按钮状态] ${episode.title}:`, {
+    isButtonDisabled,
+    isAudioValid,
+    isLoading,
+    hasError,
+    blobUrl: !!blobUrl,
+    isPlaying,
+    buttonTitle
+  });
+
+  // 新增：按钮点击处理函数
+  const handlePlayButtonClick = () => {
+    console.log(`🎮 [按钮点击] 播放按钮被点击: ${episode.title}`);
+    console.log(`🎮 [按钮点击] 当前状态:`, {
+      hasError,
+      isButtonDisabled,
+      isPlaying
+    });
+    
+    if (hasError) {
+      console.log(`🔄 [按钮点击] 执行重试操作`);
+      handleRetry();
+    } else {
+      console.log(`▶️ [按钮点击] 执行播放切换操作`);
+      onTogglePlay();
+    }
+  };
+
   return (
     <div className={`audio-player ${isPlaying ? 'playing' : ''} ${hasError ? 'error' : ''} ${isLoading ? 'loading' : ''}`}>
       <audio
@@ -358,10 +387,15 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
       
       <div className="player-controls">
         <button
-          onClick={hasError ? handleRetry : onTogglePlay}
+          onClick={handlePlayButtonClick}
           disabled={isButtonDisabled}
           className="play-button"
           title={buttonTitle}
+          style={{
+            pointerEvents: isButtonDisabled ? 'none' : 'auto',
+            opacity: isButtonDisabled ? 0.5 : 1,
+            cursor: isButtonDisabled ? 'not-allowed' : 'pointer'
+          }}
         >
           {hasError ? '🔄' : 
            isLoading ? '⏳' : 
