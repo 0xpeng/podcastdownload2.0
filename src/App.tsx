@@ -31,16 +31,8 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
   const [volume, setVolume] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
-  const [currentAudioUrl, setCurrentAudioUrl] = useState<string>('');
-  const [proxyIndex, setProxyIndex] = useState(0);
-
-  // 音頻代理列表
-  const audioProxies = [
-    '', // 直接請求
-    'https://corsproxy.io/?',
-    'https://cors.bridged.cc/',
-    'https://proxy.cors.sh/',
-  ];
+  const [blobUrl, setBlobUrl] = useState<string>('');
+  const [retryCount, setRetryCount] = useState(0);
 
   // 檢查音頻URL是否有效
   const isValidAudioUrl = (url: string): boolean => {
@@ -56,98 +48,157 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
   const audioUrl = episode.audioUrl;
   const isAudioValid = isValidAudioUrl(audioUrl);
 
-  // 獲取代理URL
-  const getProxyUrl = (originalUrl: string, proxyIndex: number): string => {
-    if (proxyIndex >= audioProxies.length || proxyIndex < 0) return originalUrl;
-    const proxy = audioProxies[proxyIndex];
-    return proxy ? proxy + encodeURIComponent(originalUrl) : originalUrl;
-  };
+  // 使用後端代理載入音頻 (與下載功能相同的API)
+  const loadAudioWithBackendProxy = async (): Promise<string> => {
+    console.log(`🎵 使用後端代理載入音頻: ${episode.title}`);
+    
+    try {
+      // 使用與下載相同的後端代理 API
+      const response = await fetch('/api/download', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          audioUrl: audioUrl,
+          title: episode.title
+        }),
+      });
 
-  // 嘗試下一個代理
-  const tryNextProxy = () => {
-    const nextIndex = proxyIndex + 1;
-    if (nextIndex < audioProxies.length) {
-      console.log(`嘗試使用代理 ${audioProxies[nextIndex] || '直接請求'} 播放音頻`);
-      setProxyIndex(nextIndex);
-      setHasError(false);
-      return true;
+      if (!response.ok) {
+        throw new Error(`後端代理錯誤 (${response.status}): ${response.statusText}`);
+      }
+
+      const audioBlob = await response.blob();
+      console.log(`✅ 音頻載入成功: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
+      
+      // 創建 Blob URL
+      const blobUrl = URL.createObjectURL(audioBlob);
+      return blobUrl;
+      
+    } catch (error) {
+      console.error('後端代理載入失敗:', error);
+      throw error;
     }
-    return false;
   };
 
-  // 重置代理索引
-  const resetProxy = () => {
-    setProxyIndex(0);
+  // 備用方案：使用前端 CORS 代理
+  const loadAudioWithFrontendProxy = async (): Promise<string> => {
+    console.log(`🌐 使用前端代理載入音頻: ${episode.title}`);
+    
+    const corsProxies = [
+      'https://corsproxy.io/?',
+      'https://cors.bridged.cc/',
+      'https://proxy.cors.sh/',
+    ];
+    
+    for (const proxy of corsProxies) {
+      try {
+        const testUrl = proxy + encodeURIComponent(audioUrl);
+        console.log(`嘗試前端代理: ${proxy}`);
+        
+        const response = await fetch(testUrl);
+        if (response.ok) {
+          const audioBlob = await response.blob();
+          console.log(`✅ 前端代理成功: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
+          return URL.createObjectURL(audioBlob);
+        }
+      } catch (error) {
+        console.log(`前端代理失敗 (${proxy}):`, error);
+        continue;
+      }
+    }
+    
+    throw new Error('所有前端代理都失敗');
+  };
+
+  // 載入音頻
+  const loadAudio = async () => {
+    if (!isAudioValid) return;
+    
+    setIsLoading(true);
     setHasError(false);
+    
+    // 清理舊的 Blob URL
+    if (blobUrl) {
+      URL.revokeObjectURL(blobUrl);
+      setBlobUrl('');
+    }
+    
+    try {
+      let newBlobUrl: string;
+      
+      // 優先使用後端代理 (與下載功能相同)
+      try {
+        newBlobUrl = await loadAudioWithBackendProxy();
+      } catch (backendError) {
+        console.warn('後端代理失敗，嘗試前端代理:', backendError);
+        newBlobUrl = await loadAudioWithFrontendProxy();
+      }
+      
+      setBlobUrl(newBlobUrl);
+      setIsLoading(false);
+      console.log(`🎯 音頻載入完成: ${episode.title}`);
+      
+    } catch (error) {
+      console.error(`❌ 所有音頻載入方法都失敗: ${episode.title}`, error);
+      setHasError(true);
+      setIsLoading(false);
+    }
   };
 
+  // 重試機制
+  const handleRetry = () => {
+    setRetryCount(prev => prev + 1);
+    loadAudio();
+  };
+
+  // 當音頻URL變化時載入音頻
+  useEffect(() => {
+    if (isAudioValid) {
+      loadAudio();
+    }
+    
+    // 清理函數
+    return () => {
+      if (blobUrl) {
+        URL.revokeObjectURL(blobUrl);
+      }
+    };
+  }, [audioUrl, isAudioValid, retryCount]);
+
+  // 設置音頻事件監聽器
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !isAudioValid) return;
+    if (!audio || !blobUrl) return;
 
-    // 設置當前音頻URL
-    const proxiedUrl = getProxyUrl(audioUrl, proxyIndex);
-    setCurrentAudioUrl(proxiedUrl);
-    
-    console.log(`設置音頻源: ${proxyIndex === 0 ? '直接請求' : `代理 ${audioProxies[proxyIndex]}`}`);
-    console.log(`音頻URL: ${proxiedUrl.substring(0, 100)}...`);
-
-    // 重置錯誤狀態
-    setHasError(false);
+    console.log(`🔗 設置音頻源: ${blobUrl.substring(0, 50)}...`);
     
     const updateTime = () => setCurrentTime(audio.currentTime);
     const updateDuration = () => setTotalDuration(audio.duration || 0);
     const handleLoadStart = () => {
-      setIsLoading(true);
-      console.log('開始載入音頻...');
+      console.log('🔄 音頻開始載入...');
     };
     const handleCanPlay = () => {
-      setIsLoading(false);
-      setHasError(false);
-      console.log('音頻可以播放');
+      console.log('✅ 音頻可以播放');
     };
     const handleLoadedMetadata = () => {
       setTotalDuration(audio.duration || 0);
-      console.log(`音頻時長: ${audio.duration}秒`);
+      console.log(`⏱️ 音頻時長: ${audio.duration}秒`);
     };
     const handleError = (e: Event) => {
-      const audio = audioRef.current;
-      const currentProxy = audioProxies[proxyIndex] || '直接請求';
-      
-      console.error(`音頻加載錯誤 (${currentProxy}):`, e);
-      
-      // 獲取更詳細的錯誤信息
-      if (audio) {
-        console.error('音頻錯誤詳情:', {
-          networkState: audio.networkState,
-          readyState: audio.readyState,
-          error: audio.error,
-          src: audio.src.substring(0, 100) + '...'
-        });
-        
-        // 根據錯誤類型提供更具體的信息
-        if (audio.error) {
-          const errorMessages = {
-            1: 'MEDIA_ERR_ABORTED - 音頻下載被中止',
-            2: 'MEDIA_ERR_NETWORK - 網絡錯誤，無法下載音頻',
-            3: 'MEDIA_ERR_DECODE - 音頻解碼錯誤，文件可能已損壞',
-            4: 'MEDIA_ERR_SRC_NOT_SUPPORTED - 音頻格式不支援或URL無效'
-          };
-          const errorMsg = errorMessages[audio.error.code as keyof typeof errorMessages] || `未知錯誤 (${audio.error.code})`;
-          console.error(`音頻錯誤代碼: ${errorMsg}`);
-        }
+      console.error('🚨 音頻播放錯誤:', e);
+      if (audio.error) {
+        const errorMessages = {
+          1: 'MEDIA_ERR_ABORTED - 音頻下載被中止',
+          2: 'MEDIA_ERR_NETWORK - 網絡錯誤',
+          3: 'MEDIA_ERR_DECODE - 音頻解碼錯誤',
+          4: 'MEDIA_ERR_SRC_NOT_SUPPORTED - 音頻格式不支援'
+        };
+        const errorMsg = errorMessages[audio.error.code as keyof typeof errorMessages] || `未知錯誤 (${audio.error.code})`;
+        console.error(`錯誤詳情: ${errorMsg}`);
       }
-      
-      setIsLoading(false);
-      
-      // 嘗試使用下一個代理
-      if (tryNextProxy()) {
-        console.log(`嘗試使用下一個代理: ${audioProxies[proxyIndex + 1] || '直接請求'}`);
-        return; // 不設置錯誤狀態，讓useEffect重新運行
-      } else {
-        console.error(`所有代理都失敗了 (${audioProxies.length}個方法)。音頻URL可能無效: ${audioUrl.substring(0, 100)}...`);
-        setHasError(true);
-      }
+      setHasError(true);
     };
 
     audio.addEventListener('timeupdate', updateTime);
@@ -158,7 +209,7 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
     audio.addEventListener('error', handleError);
 
     // 設置音頻源
-    audio.src = proxiedUrl;
+    audio.src = blobUrl;
 
     return () => {
       audio.removeEventListener('timeupdate', updateTime);
@@ -168,26 +219,22 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
       audio.removeEventListener('canplay', handleCanPlay);
       audio.removeEventListener('error', handleError);
     };
-  }, [audioUrl, isAudioValid, proxyIndex]);
+  }, [blobUrl]);
 
-  // 播放控制effect
+  // 播放控制
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !isAudioValid || hasError) return;
+    if (!audio || !blobUrl || hasError) return;
 
     if (isPlaying) {
       audio.play().catch(error => {
         console.error('播放失敗:', error);
-        // 如果播放失敗，嘗試下一個代理
-        if (!tryNextProxy()) {
-          setHasError(true);
-          setIsLoading(false);
-        }
+        setHasError(true);
       });
     } else {
       audio.pause();
     }
-  }, [isPlaying, currentAudioUrl]);
+  }, [isPlaying, blobUrl, hasError]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const audio = audioRef.current;
@@ -206,22 +253,18 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
     }
   };
 
-  // 手動重試
-  const handleRetry = () => {
-    resetProxy();
-  };
-
   const progressPercentage = totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0;
 
   // 確定播放按鈕的狀態
   const isButtonDisabled = !isAudioValid || isLoading;
-  const buttonTitle = hasError ? `音頻加載失敗 (已嘗試 ${proxyIndex + 1}/${audioProxies.length} 個方法)` : 
+  const buttonTitle = hasError ? `音頻載入失敗 (重試 ${retryCount} 次) - 點擊重試` : 
                      !isAudioValid ? '無效的音頻連結' :
-                     isLoading ? '正在加載...' :
+                     isLoading ? '正在載入音頻...' :
+                     !blobUrl ? '準備載入...' :
                      isPlaying ? '暫停' : '播放';
 
   return (
-    <div className={`audio-player ${isPlaying ? 'playing' : ''} ${hasError ? 'error' : ''}`}>
+    <div className={`audio-player ${isPlaying ? 'playing' : ''} ${hasError ? 'error' : ''} ${isLoading ? 'loading' : ''}`}>
       <audio
         ref={audioRef}
         preload="metadata"
@@ -236,6 +279,7 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
         >
           {hasError ? '🔄' : 
            isLoading ? '⏳' : 
+           !blobUrl ? '⬇️' :
            isPlaying ? '⏸️' : '▶️'}
         </button>
         
@@ -254,7 +298,7 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
           value={progressPercentage}
           onChange={handleSeek}
           className="progress-slider"
-          disabled={!totalDuration || hasError}
+          disabled={!totalDuration || hasError || isLoading}
         />
       </div>
 
@@ -267,7 +311,7 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
           value={volume * 100}
           onChange={handleVolumeChange}
           className="volume-slider"
-          disabled={hasError}
+          disabled={hasError || isLoading}
         />
       </div>
     </div>
