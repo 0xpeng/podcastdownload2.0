@@ -280,14 +280,44 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ episode, isPlaying, onToggleP
     if (!audio || !blobUrl || hasError) return;
 
     if (isPlaying) {
-      console.log(`▶️ [播放控制] 開始播放: ${episode.title}`);
-      audio.play().catch(error => {
-        console.error('🚨 [播放控制] 播放失敗:', error);
-        setHasError(true);
-        setErrorMessage(`播放失敗: ${error.message}`);
-      });
+      console.log(`▶️ [播放控制] 开始播放: ${episode.title}`);
+      console.log(`▶️ [播放控制] 音频状态检查:`);
+      console.log(`   - readyState: ${audio.readyState} (4=HAVE_ENOUGH_DATA)`);
+      console.log(`   - networkState: ${audio.networkState}`);
+      console.log(`   - duration: ${audio.duration}`);
+      console.log(`   - currentTime: ${audio.currentTime}`);
+      console.log(`   - paused: ${audio.paused}`);
+      console.log(`   - volume: ${audio.volume}`);
+      console.log(`   - muted: ${audio.muted}`);
+      console.log(`   - src: ${audio.src.substring(0, 50)}...`);
+      
+      const playPromise = audio.play();
+      
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            console.log(`✅ [播放控制] 播放成功: ${episode.title}`);
+          })
+          .catch(error => {
+            console.error('🚨 [播放控制] 播放失败:', error);
+            console.error('🚨 [播放控制] 错误类型:', error.name);
+            console.error('🚨 [播放控制] 错误详情:', error.message);
+            
+            // 常见播放错误的解决建议
+            if (error.name === 'NotAllowedError') {
+              setErrorMessage('播放被浏览器阻止 - 请先点击页面任意位置以允许音频播放');
+              alert('播放被浏览器阻止\n\n解决方案：\n1. 请先点击页面任意位置\n2. 然后再尝试播放音频\n\n这是浏览器的安全策略要求。');
+            } else if (error.name === 'NotSupportedError') {
+              setErrorMessage('音频格式不支持 - 请尝试其他集数');
+            } else {
+              setErrorMessage(`播放失败: ${error.message}`);
+            }
+            
+            setHasError(true);
+          });
+      }
     } else {
-      console.log(`⏸️ [播放控制] 暫停播放: ${episode.title}`);
+      console.log(`⏸️ [播放控制] 暂停播放: ${episode.title}`);
       audio.pause();
     }
   }, [isPlaying, blobUrl, hasError]);
@@ -459,7 +489,44 @@ function App() {
   const [testingAudio, setTestingAudio] = useState(false);
   const [audioTestResults, setAudioTestResults] = useState<Map<string, 'testing' | 'valid' | 'invalid'>>(new Map());
   
+  // 新增：用户交互检测
+  const [userInteracted, setUserInteracted] = useState(false);
+  
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // 新增：检测用户交互以允许音频播放
+  useEffect(() => {
+    const handleUserInteraction = () => {
+      if (!userInteracted) {
+        setUserInteracted(true);
+        console.log('✅ [用户交互] 检测到用户交互，音频播放已解锁');
+        
+        // 尝试创建和播放一个静音音频以解锁浏览器音频上下文
+        try {
+          const audio = new Audio();
+          audio.src = 'data:audio/mpeg;base64,SUQzBAAAAAABEVRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsuY29tIC8gTGFTb25vdGhlcXVlLm9yZwBURU5DAAAAHQAAAAM=';
+          audio.volume = 0;
+          audio.play().catch(() => {
+            // 忽略错误，这只是为了解锁音频上下文
+          });
+        } catch (error) {
+          // 忽略错误
+        }
+      }
+    };
+
+    // 监听多种用户交互事件
+    const events = ['click', 'keydown', 'touchstart', 'mousedown'];
+    events.forEach(event => {
+      document.addEventListener(event, handleUserInteraction, { once: true });
+    });
+
+    return () => {
+      events.forEach(event => {
+        document.removeEventListener(event, handleUserInteraction);
+      });
+    };
+  }, [userInteracted]);
 
   // 新增：更新轉錄設置
   const updateTranscriptionSettings = (key: keyof TranscriptionSettings, value: any) => {
@@ -471,10 +538,21 @@ function App() {
 
   // 新增：音頻播放控制函數
   const handleTogglePlay = (episodeId: string) => {
+    console.log(`🎮 [播放控制] 用户点击播放按钮: ${episodeId}`);
+    console.log(`🎮 [播放控制] 用户交互状态: ${userInteracted}`);
+    
+    // 检查用户是否已经与页面交互
+    if (!userInteracted) {
+      console.log('⚠️ [播放控制] 检测到首次播放，触发用户交互');
+      setUserInteracted(true);
+    }
+    
     if (currentlyPlaying === episodeId) {
       setCurrentlyPlaying(null); // 暫停當前播放
+      console.log(`⏸️ [播放控制] 暂停播放: ${episodeId}`);
     } else {
       setCurrentlyPlaying(episodeId); // 播放新的集數
+      console.log(`▶️ [播放控制] 开始播放: ${episodeId}`);
     }
   };
 
