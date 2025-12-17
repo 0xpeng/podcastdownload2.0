@@ -1614,7 +1614,7 @@ function App() {
   return (
     <div className="App">
       <header className="App-header">
-        <h1>🎙️ Podcast批量下載與增強轉錄工具</h1>
+        <h1>🎙️ 2026Podcast批量下載與增強轉錄工具</h1>
         <p>輸入 RSS feed 連結，批量下載 podcast 集數並生成多格式逐字稿</p>
       </header>
 
