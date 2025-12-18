@@ -461,6 +461,20 @@ interface Episode {
     contentType?: string;
     outputFormats?: string[];
   };
+  // 新增：儲存 segments 資料（用於時間軸）
+  transcriptSegments?: Array<{
+    id?: string;
+    start: number;
+    end: number;
+    text: string;
+    words?: Array<{
+      word: string;
+      start: number;
+      end: number;
+    }>;
+  }>;
+  // 新增：行銷內容生成結果
+  generatedContent?: GeneratedContent;
 }
 
 // 新增：轉錄設置接口
@@ -468,6 +482,27 @@ interface TranscriptionSettings {
   outputFormats: string[];
   contentType: string;
   enableSpeakerDiarization: boolean;
+  keywords: string; // 新增：Whisper Prompt 關鍵字
+}
+
+// 新增：行銷內容接口
+interface GeneratedTimelineItem {
+  label: string;
+  time?: string;
+  summary: string;
+}
+
+interface GeneratedSocialPosts {
+  threads?: string;
+  facebook?: string;
+  instagram?: string;
+}
+
+interface GeneratedContent {
+  timeline?: GeneratedTimelineItem[];
+  description?: string;
+  titleOptions?: string[];
+  socialPosts?: GeneratedSocialPosts;
 }
 
 const mockEpisodes: Episode[] = [
@@ -512,7 +547,8 @@ function App() {
   const [transcriptionSettings, setTranscriptionSettings] = useState<TranscriptionSettings>({
     outputFormats: ['txt'],
     contentType: 'podcast',
-    enableSpeakerDiarization: false
+    enableSpeakerDiarization: false,
+    keywords: '' // 新增：關鍵字欄位
   });
   const [showTranscriptionSettings, setShowTranscriptionSettings] = useState(false);
   
@@ -525,6 +561,8 @@ function App() {
   
   // 新增：用户交互检测
   const [userInteracted, setUserInteracted] = useState(false);
+  // 新增：行銷內容生成狀態
+  const [generatingContent, setGeneratingContent] = useState<Set<string>>(new Set());
   
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -775,6 +813,14 @@ function App() {
       return;
     }
 
+    // 新增：如果 keywords 為空，自動預填標題
+    if (!transcriptionSettings.keywords || transcriptionSettings.keywords.trim() === '') {
+      setTranscriptionSettings(prev => ({
+        ...prev,
+        keywords: episode.title
+      }));
+    }
+
     console.log(`開始增強轉錄: ${episode.title}`);
     console.log(`音檔 URL: ${episode.audioUrl}`);
     console.log('轉錄設置:', transcriptionSettings);
@@ -838,6 +884,7 @@ function App() {
               transcriptText: transcript.text,
               transcriptFormats: transcript.formats,
               transcriptMetadata: transcript.metadata,
+              transcriptSegments: transcript.segments || [], // 新增：儲存 segments
               transcriptUrl: transcript.url 
             }
           : ep
@@ -896,6 +943,74 @@ function App() {
         const newMap = new Map(prev);
         newMap.delete(episode.id);
         return newMap;
+      });
+    }
+  };
+
+  // 新增：根據逐字稿生成行銷內容
+  const handleGenerateMarketingContent = async (episode: Episode) => {
+    if (!episode.transcriptText || !episode.transcriptText.trim()) {
+      alert('請先為此集數完成逐字稿轉錄，再生成行銷內容。');
+      return;
+    }
+
+    setGeneratingContent(prev => {
+      const next = new Set(prev);
+      next.add(episode.id);
+      return next;
+    });
+
+    try {
+      console.log(`開始為集數生成行銷內容: ${episode.title}`);
+
+      const response = await fetch('/api/generate-content', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          episodeId: episode.id,
+          title: episode.title,
+          transcriptText: episode.transcriptText,
+          segments: episode.transcriptSegments || undefined, // 新增：傳送 segments
+          durationSeconds: episode.transcriptSegments && episode.transcriptSegments.length > 0
+            ? episode.transcriptSegments[episode.transcriptSegments.length - 1].end
+            : undefined,
+          language: 'zh',
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        const message = data?.error || `HTTP ${response.status}: ${response.statusText}`;
+        console.error('行銷內容生成失敗:', message);
+        alert(`行銷內容生成失敗：${message}`);
+        return;
+      }
+
+      const content: GeneratedContent | undefined = data.content;
+
+      setEpisodes(prev =>
+        prev.map(ep =>
+          ep.id === episode.id
+            ? {
+                ...ep,
+                generatedContent: content,
+              }
+            : ep
+        )
+      );
+
+      alert(`已為「${episode.title}」生成行銷內容！`);
+    } catch (error) {
+      console.error('行銷內容生成錯誤:', error);
+      alert(`行銷內容生成錯誤：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setGeneratingContent(prev => {
+        const next = new Set(prev);
+        next.delete(episode.id);
+        return next;
       });
     }
   };
@@ -989,6 +1104,8 @@ function App() {
     formData.append('outputFormats', transcriptionSettings.outputFormats.join(','));
     formData.append('contentType', transcriptionSettings.contentType);
     formData.append('enableSpeakerDiarization', transcriptionSettings.enableSpeakerDiarization.toString());
+    // 新增：傳送 keywords
+    formData.append('keywords', transcriptionSettings.keywords || '');
 
     console.log('開始上傳音檔到增強轉錄服務...');
     console.log('轉錄設置:', transcriptionSettings);
@@ -1706,6 +1823,22 @@ function App() {
                 </small>
               </div>
 
+              <div className="setting-group">
+                <label htmlFor="keywords-input">💡 提示詞 / 關鍵字 (Prompt)：</label>
+                <textarea
+                  id="keywords-input"
+                  value={transcriptionSettings.keywords}
+                  onChange={(e) => updateTranscriptionSettings('keywords', e.target.value)}
+                  placeholder="輸入人名、品牌或術語（如：Gemini, Cursor）可大幅提升辨識準確度"
+                  className="keywords-textarea"
+                  rows={3}
+                  maxLength={400}
+                />
+                <small className="setting-description">
+                  預先輸入人名、品牌或術語（如：Gemini, Cursor），可大幅提升辨識準確度。已為您預填標題。
+                </small>
+              </div>
+
               <div className="settings-summary">
                 <strong>目前設置：</strong>
                 <span>格式: {transcriptionSettings.outputFormats.join(', ').toUpperCase()}</span>
@@ -1947,7 +2080,81 @@ function App() {
                               📄
                             </button>
                           )}
+
+                          {/* 新增：行銷內容生成按鈕 */}
+                          {episode.transcriptStatus === 'completed' && (
+                            <button
+                              onClick={() => handleGenerateMarketingContent(episode)}
+                              disabled={generatingContent.has(episode.id)}
+                              className="action-button marketing-action-button"
+                              title="根據逐字稿生成時間軸、簡介、標題與社群貼文"
+                            >
+                              {generatingContent.has(episode.id) ? '✨ 生成中...' : '✨ 行銷內容'}
+                            </button>
+                          )}
                         </div>
+                        {/* 新增：行銷內容顯示區塊 */}
+                        {episode.generatedContent && (
+                          <div className="marketing-content-panel">
+                            <div className="marketing-section">
+                              <strong>建議標題：</strong>
+                              <ul>
+                                {(episode.generatedContent.titleOptions || []).map((t, idx) => (
+                                  <li key={idx}>{t}</li>
+                                ))}
+                              </ul>
+                            </div>
+                            {episode.generatedContent.description && (
+                              <div className="marketing-section">
+                                <strong>節目簡介：</strong>
+                                <p>{episode.generatedContent.description}</p>
+                              </div>
+                            )}
+                            {episode.generatedContent.timeline && episode.generatedContent.timeline.length > 0 && (
+                              <div className="marketing-section">
+                                <strong>時間軸：</strong>
+                                <ul>
+                                  {episode.generatedContent.timeline.map((item, idx) => (
+                                    <li key={idx}>
+                                      {item.time && <span className="timeline-time">[{item.time}] </span>}
+                                      <span className="timeline-label">{item.label}：</span>
+                                      <span className="timeline-summary">{item.summary}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            {episode.generatedContent.socialPosts && (
+                              <div className="marketing-section">
+                                <strong>社群貼文建議：</strong>
+                                {episode.generatedContent.socialPosts.threads && (
+                                  <div className="social-post-block">
+                                    <div className="social-label">Threads：</div>
+                                    <pre className="social-text">
+{episode.generatedContent.socialPosts.threads}
+                                    </pre>
+                                  </div>
+                                )}
+                                {episode.generatedContent.socialPosts.facebook && (
+                                  <div className="social-post-block">
+                                    <div className="social-label">Facebook：</div>
+                                    <pre className="social-text">
+{episode.generatedContent.socialPosts.facebook}
+                                    </pre>
+                                  </div>
+                                )}
+                                {episode.generatedContent.socialPosts.instagram && (
+                                  <div className="social-post-block">
+                                    <div className="social-label">Instagram：</div>
+                                    <pre className="social-text">
+{episode.generatedContent.socialPosts.instagram}
+                                    </pre>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}

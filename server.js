@@ -1,3 +1,6 @@
+// 載入 .env（若存在），讓本機可以用 .env 管理金鑰
+require('dotenv').config();
+
 const express = require('express');
 const path = require('path');
 const formidable = require('formidable');
@@ -282,6 +285,12 @@ app.post('/api/transcribe', (req, res) => {
     const outputFormats = fields.outputFormats?.[0]?.split(',') || ['txt'];
     const contentType = fields.contentType?.[0] || 'podcast';
     const enableSpeakerDiarization = fields.enableSpeakerDiarization?.[0] === 'true';
+    // 新增：接收 keywords 參數，並限制長度為 400 字元（避免超過 OpenAI 的 224 tokens 限制）
+    let keywords = fields.keywords?.[0] || '';
+    if (keywords && keywords.length > 400) {
+      keywords = keywords.substring(0, 400);
+      console.log('⚠️ keywords 超過 400 字元，已自動截斷');
+    }
 
     if (!audioFile) {
       console.log('沒有找到音檔');
@@ -396,20 +405,56 @@ app.post('/api/transcribe', (req, res) => {
       let finalTranscription;
       
       // 生成優化的提示詞
-      const optimizedPrompt = TranscriptionOptimizer.generateOptimizedPrompt('zh', contentType);
-      console.log(`使用優化提示詞: ${optimizedPrompt}`);
+      let optimizedPrompt = TranscriptionOptimizer.generateOptimizedPrompt('zh', contentType);
+      
+      // 新增：如果有 keywords，將其合併到 prompt 中
+      if (keywords && keywords.trim()) {
+        // 將 keywords 加到 prompt 前面，用換行分隔
+        optimizedPrompt = `${keywords.trim()}\n\n${optimizedPrompt}`;
+        // 再次檢查長度，確保不超過限制（約 224 tokens，約 400 字元）
+        if (optimizedPrompt.length > 400) {
+          // 如果合併後超過限制，優先保留 keywords，截斷後面的內容
+          const keywordsPart = keywords.trim();
+          const remainingLength = 400 - keywordsPart.length - 2; // 減去換行符
+          if (remainingLength > 0) {
+            const basePrompt = TranscriptionOptimizer.generateOptimizedPrompt('zh', contentType);
+            optimizedPrompt = `${keywordsPart}\n\n${basePrompt.substring(0, remainingLength)}`;
+          } else {
+            optimizedPrompt = keywordsPart.substring(0, 400);
+          }
+          console.log('⚠️ 合併後的 prompt 超過 400 字元，已自動截斷');
+        }
+        console.log(`使用優化提示詞（含關鍵字）: ${optimizedPrompt.substring(0, 100)}...`);
+      } else {
+        console.log(`使用優化提示詞: ${optimizedPrompt}`);
+      }
       
       if (processedAudio.type === 'single') {
         // 單一檔案轉錄
         console.log('開始轉錄單一音檔...');
-        const transcription = await openai.audio.transcriptions.create({
-          file: fs.createReadStream(processedAudio.file),
-          model: 'whisper-1',
-          language: 'zh',
-          response_format: 'verbose_json',
-          timestamp_granularities: ['word'],
-          prompt: optimizedPrompt
-        });
+        // 嘗試使用 gpt-4o-transcribe，如果失敗則回退到 whisper-1
+        let transcription;
+        try {
+          transcription = await openai.audio.transcriptions.create({
+            file: fs.createReadStream(processedAudio.file),
+            model: 'gpt-4o-transcribe', // 嘗試使用新模型
+            language: 'zh',
+            response_format: 'verbose_json',
+            timestamp_granularities: ['word'],
+            prompt: optimizedPrompt
+          });
+          console.log('✅ 使用 gpt-4o-transcribe 模型轉錄成功');
+        } catch (modelError) {
+          console.warn('⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1:', modelError.message);
+          transcription = await openai.audio.transcriptions.create({
+            file: fs.createReadStream(processedAudio.file),
+            model: 'whisper-1', // 回退到原模型
+            language: 'zh',
+            response_format: 'verbose_json',
+            timestamp_granularities: ['word'],
+            prompt: optimizedPrompt
+          });
+        }
         
         finalTranscription = transcription;
         
@@ -422,14 +467,28 @@ app.post('/api/transcribe', (req, res) => {
           const segmentFile = processedAudio.files[i];
           console.log(`轉錄片段 ${i + 1}/${processedAudio.files.length}: ${path.basename(segmentFile)}`);
           
-          const transcription = await openai.audio.transcriptions.create({
-            file: fs.createReadStream(segmentFile),
-            model: 'whisper-1',
-            language: 'zh',
-            response_format: 'verbose_json',
-            timestamp_granularities: ['word'],
-            prompt: optimizedPrompt
-          });
+          // 嘗試使用 gpt-4o-transcribe，如果失敗則回退到 whisper-1
+          let transcription;
+          try {
+            transcription = await openai.audio.transcriptions.create({
+              file: fs.createReadStream(segmentFile),
+              model: 'gpt-4o-transcribe', // 嘗試使用新模型
+              language: 'zh',
+              response_format: 'verbose_json',
+              timestamp_granularities: ['word'],
+              prompt: optimizedPrompt
+            });
+          } catch (modelError) {
+            console.warn(`⚠️ 片段 ${i + 1} gpt-4o-transcribe 不可用，回退到 whisper-1`);
+            transcription = await openai.audio.transcriptions.create({
+              file: fs.createReadStream(segmentFile),
+              model: 'whisper-1', // 回退到原模型
+              language: 'zh',
+              response_format: 'verbose_json',
+              timestamp_granularities: ['word'],
+              prompt: optimizedPrompt
+            });
+          }
           
           transcriptions.push(transcription);
           
@@ -447,15 +506,26 @@ app.post('/api/transcribe', (req, res) => {
       const endTime = Date.now();
       console.log(`OpenAI API 調用成功，耗時: ${(endTime - startTime) / 1000}秒`);
 
-      // 處理說話者分離
-      if (enableSpeakerDiarization && finalTranscription.segments) {
-        console.log('開始處理說話者分離...');
-        finalTranscription.segments = await SpeakerDiarization.simulateSpeakerDetection(finalTranscription.segments);
+      // 新增：自動錯字檢查與修正
+      console.log('開始錯字檢查與修正...');
+      let correctedTranscription = finalTranscription;
+      try {
+        correctedTranscription = await checkAndCorrectSpelling(finalTranscription, finalTranscription.language || 'zh', contentType);
+        console.log('✅ 錯字檢查完成');
+      } catch (spellCheckError) {
+        console.warn('⚠️ 錯字檢查失敗，使用原始轉錄結果:', spellCheckError.message);
+        // 繼續使用原始轉錄結果
       }
 
-      // 使用增強轉錄處理器生成多種格式
+      // 處理說話者分離（使用修正後的轉錄結果）
+      if (enableSpeakerDiarization && correctedTranscription.segments) {
+        console.log('開始處理說話者分離...');
+        correctedTranscription.segments = await SpeakerDiarization.simulateSpeakerDetection(correctedTranscription.segments);
+      }
+
+      // 使用增強轉錄處理器生成多種格式（使用修正後的轉錄結果）
       console.log('生成多種輸出格式...');
-      const processedResult = TranscriptionProcessor.processTranscriptionResult(finalTranscription, {
+      const processedResult = TranscriptionProcessor.processTranscriptionResult(correctedTranscription, {
         enableSpeakerDiarization,
         outputFormats,
         optimizeSegments: true,
@@ -500,9 +570,9 @@ app.post('/api/transcribe', (req, res) => {
         episodeId,
         title,
         text: processedResult.formats.txt || '',
-        duration: finalTranscription.duration,
-        language: finalTranscription.language,
-        segments: finalTranscription.segments || [],
+        duration: correctedTranscription.duration,
+        language: correctedTranscription.language,
+        segments: correctedTranscription.segments || [],
         formats: processedResult.formats,
         metadata: {
           processed: processedAudio.type !== 'single',
@@ -597,6 +667,268 @@ app.post('/api/convert-transcript', (req, res) => {
     });
   }
 });
+
+// 新增：從逐字稿生成行銷內容 API
+app.post('/api/generate-content', async (req, res) => {
+  console.log('行銷內容生成 API 請求');
+
+  if (!process.env.OPENAI_API_KEY || !openai) {
+    return res.status(500).json({
+      error: 'OpenAI API 金鑰未設置，無法生成行銷內容'
+    });
+  }
+
+  const { episodeId, title, transcriptText, segments, durationSeconds, language = 'zh' } = req.body || {};
+
+  if (!transcriptText || typeof transcriptText !== 'string' || transcriptText.trim().length < 20) {
+    return res.status(400).json({
+      error: '缺少足夠的逐字稿內容，無法生成行銷內容'
+    });
+  }
+
+  try {
+    console.log(`開始為集數生成行銷內容: ${title || episodeId || 'Unknown'}`);
+
+    const approxDuration = durationSeconds && Number.isFinite(durationSeconds)
+      ? `${Math.round(durationSeconds / 60)} 分鐘`
+      : '未知時長';
+
+    // 如果有 segments，建立時間戳對照表
+    let timeReference = '';
+    if (segments && Array.isArray(segments) && segments.length > 0) {
+      timeReference = '\n\n【時間戳參考資料】（請使用這些真實時間點來生成時間軸，不要自行估算）：\n';
+      // 取前 30 個片段作為參考（避免 prompt 太長）
+      const segmentsToShow = segments.slice(0, 30);
+      segmentsToShow.forEach((seg, idx) => {
+        const startMin = Math.floor(seg.start / 60);
+        const startSec = Math.floor(seg.start % 60);
+        const endMin = Math.floor(seg.end / 60);
+        const endSec = Math.floor(seg.end % 60);
+        timeReference += `${idx + 1}. [${startMin}:${startSec.toString().padStart(2, '0')} - ${endMin}:${endSec.toString().padStart(2, '0')}] ${(seg.text || '').substring(0, 150)}\n`;
+      });
+      if (segments.length > 30) {
+        timeReference += `...（還有 ${segments.length - 30} 個片段，請根據內容推斷時間點）\n`;
+      }
+      timeReference += '\n重要：時間軸中的時間點必須使用上述真實時間戳，格式為 MM:SS。\n';
+    }
+
+    const systemPrompt = language === 'zh'
+      ? '你是一位專業的 Podcast 行銷與內容編輯，負責根據逐字稿產生時間軸、節目簡介、吸引人的標題，以及 Threads / Facebook / Instagram 貼文文案。你的文字必須：1) 完全沒有錯字、語法錯誤或標點符號錯誤 2) 語氣自然、口語但專業 3) 目標受眾是對科技與學習有興趣的大眾 4) 時間軸必須使用提供的真實時間戳，絕對不要自行估算 5) 貼文要有吸引力、專業且自然，避免過度行銷感。'
+      : 'You are a professional podcast marketer and copywriter. Based on the transcript, you will generate a timeline, show description, catchy titles, and social media posts. Your text must be error-free, natural, and professional. Use real timestamps for the timeline.';
+
+    const userPrompt = `
+請根據以下 Podcast 逐字稿，產生一組結構化的行銷內容。
+
+節目資訊：
+- 節目標題（可視為原始標題，僅供參考）：${title || '未提供'}
+- 約略時長：${approxDuration}
+${timeReference}
+逐字稿內容（可能較長，請完整閱讀後再統整重點）：
+---
+${transcriptText}
+---
+
+請你回傳「JSON 物件」（不要額外加說明文字），結構嚴格符合以下格式：
+{
+  "timeline": [
+    {
+      "label": "章節名稱或主題，例如：開場與自我介紹",
+      "time": "真實時間點（格式：MM:SS，例如 00:00 或 05:30）。${segments && segments.length > 0 ? '請使用上方【時間戳參考資料】中的真實時間，絕對不要自行估算。' : '可粗略估計，但盡量準確。'}",
+      "summary": "1-3 句，說明這一段在講什麼、重點是什麼"
+    }
+  ],
+  "description": "1-3 個段落的節目簡介，適合放在節目說明欄，語氣自然、可口語一點，但要清楚讓第一次看到的人知道這集在講什麼、適合誰聽。請確保完全沒有錯字、語法錯誤。",
+  "titleOptions": [
+    "一個很吸引人的標題，適合 Podcast / YouTube 封面使用，15-30 字，要有記憶點、能引起好奇心",
+    "再給 1-2 個不同角度但同樣吸引人的備選標題"
+  ],
+  "socialPosts": {
+    "threads": "一則適合 Threads 的貼文，可以稍微有個性、分 2-3 行，最後附上行動呼籲（例如：來聽完整節目、留言分享看法）。語氣要自然、有吸引力，完全沒有錯字。長度約 100-200 字。",
+    "facebook": "一則適合 Facebook 的貼文，篇幅可以稍長一點（150-300 字），有明確的故事感或重點條列，最後附上 CTA。語氣專業但親切，完全沒有錯字。",
+    "instagram": "一則適合 IG 貼文說明文字（非限時動態），可以搭配圖片或 Reels 使用，語氣親切、可以加入適量 emoji（3-5 個）與 5-8 個相關 hashtag。完全沒有錯字。長度約 150-250 字。"
+  }
+}
+
+特別注意：
+- 請務必產出符合上述 key 的標準 JSON（不要多加其他欄位）。
+- 所有文字請使用繁體中文。
+- 請仔細檢查所有文字，確保完全沒有錯字、語法錯誤或標點符號錯誤。
+- 時間軸的時間點${segments && segments.length > 0 ? '必須使用【時間戳參考資料】中的真實時間戳' : '可粗略估計'}，格式為 MM:SS。
+- 貼文要有吸引力、專業且自然，避免過度行銷感或過於生硬的推銷語氣。
+- 標題要有記憶點，能引起目標受眾的好奇心。
+`;
+
+    // 嘗試使用 GPT-5.2，如果失敗則嘗試 GPT-5 mini，最後回退到 gpt-4o
+    let completion;
+    const modelsToTry = ['gpt-5.2', 'gpt-5-mini', 'gpt-4o'];
+    let lastError = null;
+    
+    for (const model of modelsToTry) {
+      try {
+        completion = await openai.chat.completions.create({
+          model: model,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.7, // 控制創造力，0.7 平衡創造力與準確性
+        });
+        console.log(`✅ 使用 ${model} 模型生成行銷內容成功`);
+        break;
+      } catch (modelError) {
+        console.warn(`⚠️ ${model} 不可用，嘗試下一個模型:`, modelError.message);
+        lastError = modelError;
+        continue;
+      }
+    }
+    
+    if (!completion) {
+      throw lastError || new Error('所有模型都不可用');
+    }
+
+    const raw = completion.choices?.[0]?.message?.content || '{}';
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      console.warn('行銷內容 JSON 解析失敗，嘗試包一層:', e);
+      parsed = { rawText: raw };
+    }
+
+    res.json({
+      success: true,
+      episodeId,
+      title,
+      content: parsed
+    });
+  } catch (error) {
+    console.error('行銷內容生成失敗:', error);
+    res.status(500).json({
+      error: `行銷內容生成失敗: ${error.message || String(error)}`
+    });
+  }
+});
+
+// 新增：錯字檢查與修正函數
+async function checkAndCorrectSpelling(transcription, language = 'zh', contentType = 'podcast') {
+  if (!transcription || !transcription.text) {
+    return transcription;
+  }
+
+  console.log('🔍 開始錯字檢查，原始文字長度:', transcription.text.length);
+
+  const systemPrompt = language === 'zh'
+    ? '你是一位專業的繁體中文校對編輯，負責檢查並修正 Podcast 逐字稿中的錯字、語法錯誤、標點符號錯誤。你的任務是：1) 找出所有錯字、語法錯誤、標點符號錯誤 2) 修正這些錯誤，但保持原始語調和口語風格 3) 不要改變原意或添加內容 4) 如果沒有錯誤，保持原文不變。'
+    : 'You are a professional proofreader. Check and correct spelling, grammar, and punctuation errors in the transcript while maintaining the original tone and meaning.';
+
+  const userPrompt = `
+請檢查並修正以下 Podcast 逐字稿中的錯字、語法錯誤、標點符號錯誤。
+
+內容類型：${contentType === 'podcast' ? '播客節目' : contentType === 'interview' ? '訪談節目' : '講座/教學'}
+語言：繁體中文
+
+原始逐字稿：
+---
+${transcription.text}
+---
+
+${transcription.segments && transcription.segments.length > 0 ? `
+時間戳片段（請同時修正這些片段中的錯字）：
+${transcription.segments.slice(0, 50).map((seg, idx) => 
+  `${idx + 1}. [${Math.floor(seg.start / 60)}:${Math.floor(seg.start % 60).toString().padStart(2, '0')}] ${seg.text}`
+).join('\n')}
+${transcription.segments.length > 50 ? `...（還有 ${transcription.segments.length - 50} 個片段）` : ''}
+` : ''}
+
+請回傳 JSON 物件，格式如下：
+{
+  "correctedText": "修正後的完整文字（如果沒有錯誤，保持原文）",
+  "correctedSegments": [
+    {
+      "id": "原始 segment 的 id（如果有）",
+      "start": 原始時間戳（秒數，保持不變）,
+      "end": 原始時間戳（秒數，保持不變）,
+      "text": "修正後的片段文字"
+    }
+  ],
+  "corrections": [
+    {
+      "original": "原始錯誤文字",
+      "corrected": "修正後文字",
+      "type": "錯字/語法/標點"
+    }
+  ],
+  "hasErrors": true/false
+}
+
+特別注意：
+- 只修正錯誤，不要改變原意或添加內容
+- 保持口語風格和語調
+- 如果沒有錯誤，correctedText 和 correctedSegments 保持與原始相同
+- 所有文字使用繁體中文
+`;
+
+  try {
+    // 嘗試使用 GPT-5.2 或 GPT-5 mini，如果失敗則使用 gpt-4o
+    const modelsToTry = ['gpt-5.2', 'gpt-5-mini', 'gpt-4o'];
+    let completion;
+    let lastError = null;
+
+    for (const model of modelsToTry) {
+      try {
+        completion = await openai.chat.completions.create({
+          model: model,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.3, // 低溫度確保準確性
+        });
+        console.log(`✅ 使用 ${model} 進行錯字檢查`);
+        break;
+      } catch (modelError) {
+        console.warn(`⚠️ ${model} 不可用，嘗試下一個模型`);
+        lastError = modelError;
+        continue;
+      }
+    }
+
+    if (!completion) {
+      throw lastError || new Error('所有模型都不可用');
+    }
+
+    const raw = completion.choices?.[0]?.message?.content || '{}';
+    const result = JSON.parse(raw);
+
+    if (result.hasErrors && result.correctedText) {
+      console.log(`✅ 發現並修正了 ${result.corrections?.length || 0} 處錯誤`);
+      
+      // 更新轉錄結果
+      const corrected = {
+        ...transcription,
+        text: result.correctedText,
+        segments: result.correctedSegments && result.correctedSegments.length > 0
+          ? result.correctedSegments.map((seg, idx) => ({
+              ...(transcription.segments[idx] || {}),
+              ...seg,
+              // 保留原始的 words 和其他屬性
+              words: transcription.segments[idx]?.words || seg.words
+            }))
+          : transcription.segments
+      };
+
+      return corrected;
+    } else {
+      console.log('✅ 未發現錯誤，保持原文');
+      return transcription;
+    }
+  } catch (error) {
+    console.error('錯字檢查過程發生錯誤:', error);
+    throw error;
+  }
+}
 
 // 輔助函數
 function downloadAudio(url, callback, maxRedirects = 5) {
