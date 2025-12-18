@@ -1,12 +1,14 @@
 {
   "build": {
-    "commands": ["npm install", "npm run build"]
+    "commands": [
+      "npm install",
+      "npm run build"
+    ]
   },
   "run": {
     "command": "node server.js"
   },
   "env": {
-    "NODE_ENV": "production",
-    "PORT": "3000"
+    "NODE_ENV": "production"
   }
 } 

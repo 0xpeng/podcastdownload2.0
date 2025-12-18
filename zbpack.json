@@ -1,7 +1,7 @@
 {
   "build_command": "npm install && npm run build",
   "start_command": "node server.js",
-  "node_version": "18",
+  "node_version": "20",
   "serverless": false,
   "static": false,
   "install_command": "npm install"
