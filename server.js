@@ -115,13 +115,7 @@ function validateAudioFileContent(filePath) {
 let ffmpegAvailable = true;
 
 // 新增：轉錄日誌儲存系統（記憶體儲存，每個 episodeId 對應一個日誌陣列）
-const transcriptionLogs = new Map<string, Array<{
-  timestamp: string;
-  level: 'info' | 'warn' | 'error' | 'success';
-  message: string;
-  stage?: string;
-  memory?: string;
-}>>();
+const transcriptionLogs = new Map();
 
 // 新增：日誌記錄函數
 function addTranscriptionLog(episodeId: string, level: 'info' | 'warn' | 'error' | 'success', message: string, stage?: string) {
