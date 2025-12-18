@@ -542,6 +542,15 @@ function App() {
   const [isPaused, setIsPaused] = useState(false);
   const [transcribing, setTranscribing] = useState<Set<string>>(new Set());
   const [transcriptProgress, setTranscriptProgress] = useState<Map<string, number>>(new Map());
+  // 新增：轉錄日誌狀態
+  const [transcriptionLogs, setTranscriptionLogs] = useState<Map<string, Array<{
+    timestamp: string;
+    level: 'info' | 'warn' | 'error' | 'success';
+    message: string;
+    stage?: string;
+    memory?: string;
+  }>>>(new Map());
+  const [showLogs, setShowLogs] = useState<Map<string, boolean>>(new Map());
   
   // 新增：轉錄設置狀態
   const [transcriptionSettings, setTranscriptionSettings] = useState<TranscriptionSettings>({
@@ -892,6 +901,28 @@ function App() {
 
       console.log(`"${episode.title}" 增強轉錄完成！`);
       
+      // 停止輪詢日誌
+      const successIntervalId = (window as any)[`logPolling_${episode.id}`];
+      if (successIntervalId) {
+        clearInterval(successIntervalId);
+        delete (window as any)[`logPolling_${episode.id}`];
+      }
+      
+      // 最後一次獲取日誌
+      try {
+        const response = await fetch(`/api/transcribe-logs/${episode.id}`);
+        const data = await response.json();
+        if (data.success && data.logs) {
+          setTranscriptionLogs(prev => {
+            const newMap = new Map(prev);
+            newMap.set(episode.id, data.logs);
+            return newMap;
+          });
+        }
+      } catch (logError) {
+        console.error('獲取最終日誌失敗:', logError);
+      }
+      
       // 顯示完成訊息
       let successMessage = `"${episode.title}" 轉錄完成！`;
       
@@ -939,6 +970,28 @@ function App() {
         newSet.delete(episode.id);
         return newSet;
       });
+      
+      // 停止輪詢日誌
+      const intervalId = (window as any)[`logPolling_${episode.id}`];
+      if (intervalId) {
+        clearInterval(intervalId);
+        delete (window as any)[`logPolling_${episode.id}`];
+      }
+      
+      // 最後一次獲取日誌
+      try {
+        const response = await fetch(`/api/transcribe-logs/${episode.id}`);
+        const data = await response.json();
+        if (data.success && data.logs) {
+          setTranscriptionLogs(prev => {
+            const newMap = new Map(prev);
+            newMap.set(episode.id, data.logs);
+            return newMap;
+          });
+        }
+      } catch (error) {
+        console.error('獲取最終日誌失敗:', error);
+      }
       setTranscriptProgress(prev => {
         const newMap = new Map(prev);
         newMap.delete(episode.id);
@@ -1673,6 +1726,120 @@ function App() {
     setIsPaused(true);
   };
 
+  // 新增：切換日誌顯示
+  const toggleLogs = (episodeId: string) => {
+    setShowLogs(prev => {
+      const newMap = new Map(prev);
+      newMap.set(episodeId, !(prev.get(episodeId) || false));
+      return newMap;
+    });
+  };
+
+  // 新增：渲染日誌組件
+  const renderTranscriptionLogs = (episode: Episode) => {
+    const logs = transcriptionLogs.get(episode.id) || [];
+    const isShowing = showLogs.get(episode.id) || false;
+    
+    if (!isShowing && logs.length === 0) {
+      return null;
+    }
+    
+    const getLogIcon = (level: string) => {
+      switch (level) {
+        case 'success': return '✅';
+        case 'error': return '❌';
+        case 'warn': return '⚠️';
+        default: return 'ℹ️';
+      }
+    };
+    
+    const getLogColor = (level: string) => {
+      switch (level) {
+        case 'success': return '#4caf50';
+        case 'error': return '#f44336';
+        case 'warn': return '#ff9800';
+        default: return '#2196f3';
+      }
+    };
+    
+    return (
+      <div className="transcription-logs-container" style={{ marginTop: '10px' }}>
+        <button
+          onClick={() => toggleLogs(episode.id)}
+          className="toggle-logs-button"
+          style={{
+            background: 'none',
+            border: '1px solid #ddd',
+            borderRadius: '4px',
+            padding: '5px 10px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            color: '#666'
+          }}
+        >
+          {isShowing ? '📋 隱藏日誌' : '📋 顯示日誌'} ({logs.length})
+        </button>
+        
+        {isShowing && (
+          <div 
+            className="transcription-logs"
+            style={{
+              marginTop: '10px',
+              maxHeight: '300px',
+              overflowY: 'auto',
+              border: '1px solid #ddd',
+              borderRadius: '4px',
+              padding: '10px',
+              backgroundColor: '#f9f9f9',
+              fontSize: '12px',
+              fontFamily: 'monospace'
+            }}
+          >
+            {logs.length === 0 ? (
+              <div style={{ color: '#999', fontStyle: 'italic' }}>暫無日誌...</div>
+            ) : (
+              logs.map((log, index) => (
+                <div
+                  key={index}
+                  style={{
+                    marginBottom: '8px',
+                    padding: '5px',
+                    borderLeft: `3px solid ${getLogColor(log.level)}`,
+                    paddingLeft: '10px',
+                    backgroundColor: log.level === 'error' ? '#ffebee' : log.level === 'warn' ? '#fff3e0' : 'white'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <span>{getLogIcon(log.level)}</span>
+                    <span style={{ color: '#666', fontSize: '11px' }}>
+                      {new Date(log.timestamp).toLocaleTimeString()}
+                    </span>
+                    {log.stage && (
+                      <span style={{ 
+                        backgroundColor: '#e3f2fd', 
+                        padding: '2px 6px', 
+                        borderRadius: '3px',
+                        fontSize: '10px'
+                      }}>
+                        {log.stage}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ marginTop: '4px', color: '#333', wordBreak: 'break-word' }}>{log.message}</div>
+                  {log.memory && (
+                    <div style={{ marginTop: '2px', fontSize: '10px', color: '#999' }}>
+                      💾 {log.memory}
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // 渲染轉錄狀態圖示
   const renderTranscriptStatus = (episode: Episode) => {
     const isTranscribing = transcribing.has(episode.id);
@@ -2013,6 +2180,7 @@ function App() {
                       <td>
                         <div className="transcript-status-container">
                           {renderTranscriptStatus(episode)}
+                          {renderTranscriptionLogs(episode)}
                           {episode.transcriptMetadata && (
                             <div className="transcript-metadata">
                               {episode.transcriptMetadata.speakerDiarization && (

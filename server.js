@@ -114,8 +114,49 @@ function validateAudioFileContent(filePath) {
 
 let ffmpegAvailable = true;
 
+// 新增：轉錄日誌儲存系統（記憶體儲存，每個 episodeId 對應一個日誌陣列）
+const transcriptionLogs = new Map<string, Array<{
+  timestamp: string;
+  level: 'info' | 'warn' | 'error' | 'success';
+  message: string;
+  stage?: string;
+  memory?: string;
+}>>();
+
+// 新增：日誌記錄函數
+function addTranscriptionLog(episodeId: string, level: 'info' | 'warn' | 'error' | 'success', message: string, stage?: string) {
+  if (!transcriptionLogs.has(episodeId)) {
+    transcriptionLogs.set(episodeId, []);
+  }
+  const logs = transcriptionLogs.get(episodeId)!;
+  const memory = logMemoryUsage('', true); // 獲取記憶體資訊但不輸出
+  logs.push({
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    stage,
+    memory
+  });
+  // 限制日誌數量，避免記憶體過大（保留最近 500 條）
+  if (logs.length > 500) {
+    logs.shift();
+  }
+}
+
+// 新增：清理舊日誌（完成後保留 5 分鐘）
+function cleanupLogs(episodeId: string) {
+  setTimeout(() => {
+    transcriptionLogs.delete(episodeId);
+    console.log(`已清理 ${episodeId} 的日誌`);
+  }, 5 * 60 * 1000); // 5 分鐘後清理
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// 設置 Express server timeout（30 分鐘，足夠處理長音檔）
+app.timeout = 30 * 60 * 1000; // 30 分鐘
+console.log(`✅ Express server timeout 設置為: ${app.timeout / 1000 / 60} 分鐘`);
 
 // 初始化 OpenAI 客戶端，強制使用官方端點避免代理問題
 let openai = null;
@@ -127,7 +168,7 @@ if (process.env.OPENAI_API_KEY) {
     openai = new OpenAI({ 
       apiKey: process.env.OPENAI_API_KEY,
       baseURL: baseURL,
-      timeout: 60000, // 60 秒超時
+      timeout: 20 * 60 * 1000, // 20 分鐘超時（足夠處理長音檔轉錄）
       maxRetries: 2   // 最多重試 2 次
     });
     
@@ -140,7 +181,7 @@ if (process.env.OPENAI_API_KEY) {
     console.warn('OpenAI 初始化失敗:', error);
     openai = new OpenAI({ 
       apiKey: process.env.OPENAI_API_KEY,
-      timeout: 60000,
+      timeout: 20 * 60 * 1000, // 20 分鐘超時
       maxRetries: 2
     });
   }
@@ -240,9 +281,48 @@ app.post('/api/download', (req, res) => {
   });
 });
 
+// 輔助函數：記錄記憶體使用
+function logMemoryUsage(stage, silent = false) {
+  const usage = process.memoryUsage();
+  const formatMB = (bytes) => (bytes / 1024 / 1024).toFixed(2);
+  const memoryInfo = `RSS=${formatMB(usage.rss)}MB, Heap=${formatMB(usage.heapUsed)}/${formatMB(usage.heapTotal)}MB, External=${formatMB(usage.external)}MB`;
+  if (!silent) {
+    console.log(`[記憶體] ${stage}: ${memoryInfo}`);
+  }
+  return memoryInfo;
+}
+
+// 新增：查詢轉錄日誌 API
+app.get('/api/transcribe-logs/:episodeId', (req, res) => {
+  const { episodeId } = req.params;
+  const logs = transcriptionLogs.get(episodeId) || [];
+  res.json({
+    success: true,
+    episodeId,
+    logs,
+    count: logs.length
+  });
+});
+
 // 增強版轉錄 API
 app.post('/api/transcribe', (req, res) => {
-  console.log(`增強版轉錄 API 請求開始`);
+  const requestStartTime = Date.now();
+  console.log(`\n=== 增強版轉錄 API 請求開始 ===`);
+  console.log(`請求時間: ${new Date().toISOString()}`);
+  logMemoryUsage('請求開始');
+  
+  // 初始化日誌
+  const episodeId = req.body?.episodeId || 'unknown';
+  transcriptionLogs.set(episodeId, []);
+  addTranscriptionLog(episodeId, 'info', '轉錄任務開始', '初始化');
+  
+  // 設置 response timeout（30 分鐘）
+  req.setTimeout(30 * 60 * 1000, () => {
+    console.error('⚠️ 請求超時（30 分鐘）');
+    if (!res.headersSent) {
+      res.status(504).json({ error: '請求超時，請嘗試分割音檔或使用較短的音檔' });
+    }
+  });
   
   const form = new formidable.IncomingForm({
     maxFileSize: 30 * 1024 * 1024, // 30MB 上傳上限，稍高於 OpenAI 25MB 限制
@@ -297,10 +377,19 @@ app.post('/api/transcribe', (req, res) => {
       return res.status(400).json({ error: '沒有找到音檔' });
     }
 
-    console.log(`開始增強轉錄: ${title} (${(audioFile.size / 1024 / 1024).toFixed(2)}MB)`);
-    console.log(`輸出格式: ${outputFormats.join(', ')}`);
-    console.log(`內容類型: ${contentType}`);
-    console.log(`說話者分離: ${enableSpeakerDiarization ? '啟用' : '停用'}`);
+    const fileSizeMB = (audioFile.size / 1024 / 1024).toFixed(2);
+    const estimatedDuration = Math.ceil((audioFile.size / 1024 / 1024) * 0.5); // 粗略估算：1MB ≈ 0.5 分鐘
+    console.log(`\n📋 轉錄任務資訊:`);
+    console.log(`  標題: ${title}`);
+    console.log(`  檔案大小: ${fileSizeMB}MB`);
+    console.log(`  預估時長: 約 ${estimatedDuration} 分鐘`);
+    console.log(`  輸出格式: ${outputFormats.join(', ')}`);
+    console.log(`  內容類型: ${contentType}`);
+    console.log(`  說話者分離: ${enableSpeakerDiarization ? '啟用' : '停用'}`);
+    logMemoryUsage('任務開始');
+    
+    addTranscriptionLog(episodeId, 'info', `檔案大小: ${fileSizeMB}MB，預估時長: 約 ${estimatedDuration} 分鐘`, '任務資訊');
+    addTranscriptionLog(episodeId, 'info', `輸出格式: ${outputFormats.join(', ')}, 內容類型: ${contentType}`, '任務資訊');
 
     // 新增：驗證和正規化音檔格式
     try {
@@ -346,11 +435,22 @@ app.post('/api/transcribe', (req, res) => {
     
     if (audioFile.size > OPENAI_LIMIT) {
       const fileSizeMB = (audioFile.size / 1024 / 1024).toFixed(2);
-      console.log(`音檔大小 ${fileSizeMB}MB 超過 25MB，啟動自動處理...`);
+      console.log(`\n🔧 [階段 1/4] 音檔處理開始`);
+      console.log(`  音檔大小 ${fileSizeMB}MB 超過 25MB，啟動自動處理...`);
+      const processingStartTime = Date.now();
+      logMemoryUsage('音檔處理開始');
+      addTranscriptionLog(episodeId, 'info', `[階段 1/4] 音檔處理開始 - 檔案大小 ${fileSizeMB}MB 超過 25MB，啟動自動處理`, '音檔處理');
       
       try {
         try { 
           processedAudio = await processLargeAudio(audioFile, title); 
+          const processingDuration = ((Date.now() - processingStartTime) / 1000).toFixed(2);
+          console.log(`✅ [階段 1/4] 音檔處理完成，耗時: ${processingDuration} 秒`);
+          logMemoryUsage('音檔處理完成');
+          addTranscriptionLog(episodeId, 'success', `[階段 1/4] 音檔處理完成，耗時: ${processingDuration} 秒`, '音檔處理');
+          if (processedAudio.type === 'segments') {
+            addTranscriptionLog(episodeId, 'info', `音檔已分割為 ${processedAudio.totalSegments} 個片段`, '音檔處理');
+          }
         } catch (ffmpegError) { 
           if (ffmpegError.message.includes("ffmpeg") || ffmpegError.message.includes("ENOENT")) { 
             console.error("FFmpeg 不可用:", ffmpegError.message); 
@@ -369,9 +469,16 @@ app.post('/api/transcribe', (req, res) => {
           } 
           throw ffmpegError; 
         }
-        console.log(`音檔處理完成，類型: ${processedAudio.type}`);
+        console.log(`  處理結果類型: ${processedAudio.type}`);
+        if (processedAudio.type === 'segments') {
+          console.log(`  片段數量: ${processedAudio.totalSegments}`);
+        }
       } catch (error) {
-        console.error('音檔處理失敗:', error);
+        console.error('\n❌ [階段 1/4] 音檔處理失敗');
+        console.error('錯誤詳情:', error);
+        console.error('錯誤堆疊:', error.stack);
+        logMemoryUsage('音檔處理失敗');
+        addTranscriptionLog(episodeId, 'error', `[階段 1/4] 音檔處理失敗: ${error.message}`, '錯誤');
         return res.status(500).json({
           error: `音檔處理失敗: ${error.message}`,
           suggestions: [
@@ -398,8 +505,11 @@ app.post('/api/transcribe', (req, res) => {
       });
     }
 
-    console.log(`調用 Whisper API: ${openai.baseURL}`);
-    const startTime = Date.now();
+    console.log(`\n🎤 [階段 2/4] 開始轉錄`);
+    console.log(`  OpenAI API 端點: ${openai.baseURL}`);
+    const transcriptionStartTime = Date.now();
+    logMemoryUsage('轉錄開始');
+    addTranscriptionLog(episodeId, 'info', `[階段 2/4] 開始轉錄 - OpenAI API 端點: ${openai.baseURL}`, '轉錄');
     
     try {
       let finalTranscription;
@@ -431,10 +541,14 @@ app.post('/api/transcribe', (req, res) => {
       
       if (processedAudio.type === 'single') {
         // 單一檔案轉錄
-        console.log('開始轉錄單一音檔...');
+        console.log('  轉錄模式: 單一檔案');
+        const segmentStartTime = Date.now();
+        addTranscriptionLog(episodeId, 'info', '轉錄模式: 單一檔案', '轉錄');
         // 嘗試使用 gpt-4o-transcribe，如果失敗則回退到 whisper-1
         let transcription;
         try {
+          console.log('  正在呼叫 OpenAI API...');
+          addTranscriptionLog(episodeId, 'info', '正在呼叫 OpenAI API...', '轉錄');
           transcription = await openai.audio.transcriptions.create({
             file: fs.createReadStream(processedAudio.file),
             model: 'gpt-4o-transcribe', // 嘗試使用新模型
@@ -443,9 +557,13 @@ app.post('/api/transcribe', (req, res) => {
             timestamp_granularities: ['word'],
             prompt: optimizedPrompt
           });
-          console.log('✅ 使用 gpt-4o-transcribe 模型轉錄成功');
+          const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
+          console.log(`  ✅ 使用 gpt-4o-transcribe 模型轉錄成功，耗時: ${segmentDuration} 秒`);
+          addTranscriptionLog(episodeId, 'success', `使用 gpt-4o-transcribe 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
         } catch (modelError) {
-          console.warn('⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1:', modelError.message);
+          console.warn(`  ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
+          console.log('  正在使用 whisper-1 模型...');
+          addTranscriptionLog(episodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1`, '轉錄');
           transcription = await openai.audio.transcriptions.create({
             file: fs.createReadStream(processedAudio.file),
             model: 'whisper-1', // 回退到原模型
@@ -460,16 +578,22 @@ app.post('/api/transcribe', (req, res) => {
         
       } else {
         // 多片段轉錄
-        console.log(`開始轉錄 ${processedAudio.totalSegments} 個音檔片段...`);
+        console.log(`  轉錄模式: 多片段（共 ${processedAudio.totalSegments} 個片段）`);
         const transcriptions = [];
+        const totalSegments = processedAudio.files.length;
         
         for (let i = 0; i < processedAudio.files.length; i++) {
           const segmentFile = processedAudio.files[i];
-          console.log(`轉錄片段 ${i + 1}/${processedAudio.files.length}: ${path.basename(segmentFile)}`);
+          const segmentStartTime = Date.now();
+          console.log(`\n  📝 片段 ${i + 1}/${totalSegments}: ${path.basename(segmentFile)}`);
+          logMemoryUsage(`片段 ${i + 1} 開始`);
+          addTranscriptionLog(episodeId, 'info', `片段 ${i + 1}/${totalSegments}: ${path.basename(segmentFile)}`, '轉錄');
           
           // 嘗試使用 gpt-4o-transcribe，如果失敗則回退到 whisper-1
           let transcription;
           try {
+            console.log(`    正在呼叫 OpenAI API...`);
+            addTranscriptionLog(episodeId, 'info', `片段 ${i + 1} 正在呼叫 OpenAI API...`, '轉錄');
             transcription = await openai.audio.transcriptions.create({
               file: fs.createReadStream(segmentFile),
               model: 'gpt-4o-transcribe', // 嘗試使用新模型
@@ -479,7 +603,8 @@ app.post('/api/transcribe', (req, res) => {
               prompt: optimizedPrompt
             });
           } catch (modelError) {
-            console.warn(`⚠️ 片段 ${i + 1} gpt-4o-transcribe 不可用，回退到 whisper-1`);
+            console.warn(`    ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
+            console.log(`    正在使用 whisper-1 模型...`);
             transcription = await openai.audio.transcriptions.create({
               file: fs.createReadStream(segmentFile),
               model: 'whisper-1', // 回退到原模型
@@ -491,29 +616,49 @@ app.post('/api/transcribe', (req, res) => {
           }
           
           transcriptions.push(transcription);
+          const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
+          console.log(`    ✅ 片段 ${i + 1} 轉錄完成，耗時: ${segmentDuration} 秒`);
+          logMemoryUsage(`片段 ${i + 1} 完成`);
+          addTranscriptionLog(episodeId, 'success', `片段 ${i + 1} 轉錄完成，耗時: ${segmentDuration} 秒`, '轉錄');
           
           // 片段間稍作延遲，避免API請求過快
           if (i < processedAudio.files.length - 1) {
+            console.log(`    等待 1 秒後處理下一個片段...`);
+            addTranscriptionLog(episodeId, 'info', '等待 1 秒後處理下一個片段...', '轉錄');
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
         }
         
         // 合併所有轉錄結果
-        console.log('合併轉錄結果...');
+        console.log(`\n  🔗 合併 ${transcriptions.length} 個轉錄結果...`);
+        const mergeStartTime = Date.now();
         finalTranscription = mergeTranscriptions(transcriptions);
+        const mergeDuration = ((Date.now() - mergeStartTime) / 1000).toFixed(2);
+        console.log(`  ✅ 合併完成，耗時: ${mergeDuration} 秒`);
       }
       
-      const endTime = Date.now();
-      console.log(`OpenAI API 調用成功，耗時: ${(endTime - startTime) / 1000}秒`);
+      const transcriptionDuration = ((Date.now() - transcriptionStartTime) / 1000 / 60).toFixed(2);
+      console.log(`✅ [階段 2/4] 轉錄完成，總耗時: ${transcriptionDuration} 分鐘`);
+      logMemoryUsage('轉錄完成');
+      addTranscriptionLog(episodeId, 'success', `[階段 2/4] 轉錄完成，總耗時: ${transcriptionDuration} 分鐘`, '轉錄');
+      
 
       // 新增：自動錯字檢查與修正
-      console.log('開始錯字檢查與修正...');
+      console.log(`\n🔍 [階段 3/4] 開始錯字檢查與修正`);
+      const spellCheckStartTime = Date.now();
+      logMemoryUsage('錯字檢查開始');
+      addTranscriptionLog(episodeId, 'info', '[階段 3/4] 開始錯字檢查與修正', '錯字檢查');
       let correctedTranscription = finalTranscription;
       try {
         correctedTranscription = await checkAndCorrectSpelling(finalTranscription, finalTranscription.language || 'zh', contentType);
-        console.log('✅ 錯字檢查完成');
+        const spellCheckDuration = ((Date.now() - spellCheckStartTime) / 1000).toFixed(2);
+        console.log(`✅ [階段 3/4] 錯字檢查完成，耗時: ${spellCheckDuration} 秒`);
+        logMemoryUsage('錯字檢查完成');
+        addTranscriptionLog(episodeId, 'success', `[階段 3/4] 錯字檢查完成，耗時: ${spellCheckDuration} 秒`, '錯字檢查');
       } catch (spellCheckError) {
-        console.warn('⚠️ 錯字檢查失敗，使用原始轉錄結果:', spellCheckError.message);
+        console.warn(`⚠️ [階段 3/4] 錯字檢查失敗，使用原始轉錄結果: ${spellCheckError.message}`);
+        logMemoryUsage('錯字檢查失敗');
+        addTranscriptionLog(episodeId, 'warn', `[階段 3/4] 錯字檢查失敗，使用原始轉錄結果: ${spellCheckError.message}`, '錯字檢查');
         // 繼續使用原始轉錄結果
       }
 
@@ -523,8 +668,10 @@ app.post('/api/transcribe', (req, res) => {
         correctedTranscription.segments = await SpeakerDiarization.simulateSpeakerDetection(correctedTranscription.segments);
       }
 
-      // 使用增強轉錄處理器生成多種格式（使用修正後的轉錄結果）
-      console.log('生成多種輸出格式...');
+      // 使用增強轉錄處理器生成多種輸出格式（使用修正後的轉錄結果）
+      console.log(`\n📄 [階段 4/4] 生成多種輸出格式`);
+      const formatStartTime = Date.now();
+      logMemoryUsage('格式生成開始');
       const processedResult = TranscriptionProcessor.processTranscriptionResult(correctedTranscription, {
         enableSpeakerDiarization,
         outputFormats,
@@ -558,11 +705,24 @@ app.post('/api/transcribe', (req, res) => {
         console.warn('清理臨時檔案失敗:', cleanupError);
       }
 
-      console.log(`轉錄完成: ${title}`);
-      console.log(`文字長度: ${processedResult.formats.txt?.length || 0} 字元`);
+      const formatDuration = ((Date.now() - formatStartTime) / 1000).toFixed(2);
+      console.log(`✅ [階段 4/4] 格式生成完成，耗時: ${formatDuration} 秒`);
+      logMemoryUsage('格式生成完成');
+      
+      const totalDuration = ((Date.now() - requestStartTime) / 1000 / 60).toFixed(2);
+      console.log(`\n🎉 轉錄任務完成: ${title}`);
+      console.log(`  總耗時: ${totalDuration} 分鐘`);
+      console.log(`  文字長度: ${processedResult.formats.txt?.length || 0} 字元`);
       if (processedAudio.type === 'segments') {
-        console.log(`共處理 ${processedAudio.totalSegments} 個音檔片段`);
+        console.log(`  處理片段數: ${processedAudio.totalSegments} 個`);
       }
+      logMemoryUsage('任務完成');
+      console.log(`=== 轉錄 API 請求結束 ===\n`);
+      
+      addTranscriptionLog(episodeId, 'success', `🎉 轉錄任務完成！總耗時: ${totalDuration} 分鐘，文字長度: ${processedResult.formats.txt?.length || 0} 字元`, '完成');
+      
+      // 清理日誌（5 分鐘後）
+      cleanupLogs(episodeId);
 
       // 回傳增強的結果
       res.json({
@@ -1033,7 +1193,10 @@ function formatTime(seconds) {
 // 音檔壓縮功能 - 增強版，支持多種編解碼器
 function compressAudio(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
-    console.log(`開始壓縮音檔: ${inputPath}`);
+    const compressStartTime = Date.now();
+    console.log(`\n  🗜️ 開始壓縮音檔`);
+    console.log(`    輸入檔案: ${path.basename(inputPath)}`);
+    logMemoryUsage('壓縮開始');
     
     // 嘗試不同的編解碼器配置
     const codecConfigs = [
@@ -1106,11 +1269,13 @@ function compressAudio(inputPath, outputPath) {
           }
         })
         .on('end', () => {
-          console.log(`音檔壓縮完成，使用編解碼器: ${config.codec}`);
+          const compressDuration = ((Date.now() - compressStartTime) / 1000).toFixed(2);
+          console.log(`  ✅ 音檔壓縮完成，使用編解碼器: ${config.codec}，耗時: ${compressDuration} 秒`);
+          logMemoryUsage('壓縮完成');
           resolve(finalOutputPath);
         })
         .on('error', (err) => {
-          console.log(`編解碼器 ${config.codec} 失敗: ${err.message}`);
+          console.log(`    ⚠️ 編解碼器 ${config.codec} 失敗: ${err.message}`);
           // 嘗試下一個編解碼器
           tryCompress(configIndex + 1);
         })
@@ -1124,7 +1289,11 @@ function compressAudio(inputPath, outputPath) {
 // 音檔分割功能 - 增強版，支持多種格式
 function splitAudio(inputPath, outputDir, segmentDuration = 600) { // 10分鐘片段
   return new Promise((resolve, reject) => {
-    console.log(`開始分割音檔: ${inputPath}，片段長度: ${segmentDuration}秒`);
+    const splitStartTime = Date.now();
+    console.log(`\n  ✂️ 開始分割音檔`);
+    console.log(`    輸入檔案: ${path.basename(inputPath)}`);
+    console.log(`    片段長度: ${segmentDuration}秒 (${segmentDuration / 60} 分鐘)`);
+    logMemoryUsage('分割開始');
     
     // 創建輸出目錄
     if (!fs.existsSync(outputDir)) {
@@ -1171,6 +1340,11 @@ function splitAudio(inputPath, outputDir, segmentDuration = 600) { // 10分鐘�
       .on('start', (commandLine) => {
         console.log('FFmpeg 分割命令:', commandLine);
       })
+      .on('progress', (progress) => {
+        if (progress.percent) {
+          console.log(`    分割進度: ${Math.round(progress.percent)}%`);
+        }
+      })
       .on('end', () => {
         // 獲取生成的片段檔案列表
         const files = fs.readdirSync(outputDir)
@@ -1178,11 +1352,15 @@ function splitAudio(inputPath, outputDir, segmentDuration = 600) { // 10分鐘�
           .sort()
           .map(file => path.join(outputDir, file));
         
-        console.log(`音檔分割完成，共 ${files.length} 個片段`);
+        const splitDuration = ((Date.now() - splitStartTime) / 1000).toFixed(2);
+        console.log(`  ✅ 音檔分割完成，共 ${files.length} 個片段，耗時: ${splitDuration} 秒`);
+        logMemoryUsage('分割完成');
         resolve(files);
       })
       .on('error', (err) => {
-        console.error('音檔分割失敗:', err);
+        console.error(`  ❌ 音檔分割失敗: ${err.message}`);
+        console.error(`  錯誤詳情:`, err);
+        logMemoryUsage('分割失敗');
         reject(err);
       })
       .save(outputPattern);
@@ -1204,7 +1382,7 @@ async function processLargeAudio(audioFile, title) {
   
   try {
     // 步驟 1: 嘗試壓縮音檔
-    console.log('步驟 1: 壓縮音檔以減少檔案大小...');
+    console.log('  步驟 1/2: 壓縮音檔以減少檔案大小...');
     const actualCompressedPath = await compressAudio(audioFile.filepath, compressedPath);
     
     // 檢查壓縮後的檔案大小
@@ -1237,7 +1415,7 @@ async function processLargeAudio(audioFile, title) {
     }
     
     // 步驟 2: 壓縮後還是太大，需要分割
-    console.log('步驟 2: 壓縮後仍超過限制，開始分割音檔...');
+    console.log('  步驟 2/2: 壓縮後仍超過限制，開始分割音檔...');
     const segmentDir = path.join(tempDir, `${baseFilename}_segments`);
     const segmentFiles = await splitAudio(actualCompressedPath, segmentDir, 600); // 10分鐘片段
     
@@ -1267,9 +1445,16 @@ async function processLargeAudio(audioFile, title) {
     };
     
   } catch (error) {
+    console.error('\n❌ 音檔處理過程發生錯誤');
+    console.error('錯誤類型:', error.constructor.name);
+    console.error('錯誤訊息:', error.message);
+    console.error('錯誤堆疊:', error.stack);
+    logMemoryUsage('處理錯誤');
+    
     // 清理臨時檔案
+    console.log('\n🧹 開始清理臨時檔案...');
     try {
-      // 嘗試清理可能的檔案格式
+      // 清理壓縮檔案
       const possibleExtensions = ['.mp3', '.m4a', '.ogg', '.wav'];
       const basePath = compressedPath.replace(/\.[^.]+$/, '');
       
@@ -1277,11 +1462,35 @@ async function processLargeAudio(audioFile, title) {
         const possiblePath = basePath + ext;
         if (fs.existsSync(possiblePath)) {
           fs.unlinkSync(possiblePath);
-          console.log(`清理了臨時檔案: ${possiblePath}`);
+          console.log(`  ✅ 清理了臨時檔案: ${path.basename(possiblePath)}`);
         }
       }
+      
+      // 清理分割片段目錄
+      const segmentDir = path.join(tempDir, `${baseFilename}_segments`);
+      if (fs.existsSync(segmentDir)) {
+        const segmentFiles = fs.readdirSync(segmentDir);
+        for (const file of segmentFiles) {
+          const filePath = path.join(segmentDir, file);
+          try {
+            fs.unlinkSync(filePath);
+            console.log(`  ✅ 清理了片段檔案: ${file}`);
+          } catch (fileError) {
+            console.warn(`  ⚠️ 無法清理片段檔案 ${file}:`, fileError.message);
+          }
+        }
+        try {
+          fs.rmdirSync(segmentDir);
+          console.log(`  ✅ 清理了片段目錄`);
+        } catch (dirError) {
+          console.warn(`  ⚠️ 無法清理片段目錄:`, dirError.message);
+        }
+      }
+      
+      console.log('✅ 臨時檔案清理完成');
     } catch (cleanupError) {
-      console.warn('清理臨時檔案失敗:', cleanupError);
+      console.error('❌ 清理臨時檔案失敗:', cleanupError);
+      console.error('清理錯誤堆疊:', cleanupError.stack);
     }
     
     throw new Error(`音檔處理失敗: ${error.message}`);
