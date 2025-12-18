@@ -3,5 +3,6 @@
   "start_command": "node server.js",
   "node_version": "18",
   "serverless": false,
-  "static": false
+  "static": false,
+  "install_command": "npm install"
 } 

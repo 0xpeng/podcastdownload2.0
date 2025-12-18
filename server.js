@@ -1337,17 +1337,25 @@ function mergeTranscriptions(transcriptions) {
 }
 
 // 啟動服務器
+// 靜態文件服務（生產環境）- 必須在 app.listen() 之前設置
+if (process.env.NODE_ENV === 'production' || !process.env.NODE_ENV) {
+  // 檢查 build 目錄是否存在
+  const buildPath = path.join(__dirname, 'build');
+  if (fs.existsSync(buildPath)) {
+    app.use(express.static(buildPath));
+    
+    // 所有其他路由都返回 index.html（用於 React Router）
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(buildPath, 'index.html'));
+    });
+    console.log('✅ 靜態檔案服務已啟用，build 目錄:', buildPath);
+  } else {
+    console.warn('⚠️ build 目錄不存在，靜態檔案服務未啟用。請先執行 npm run build');
+  }
+}
+
 app.listen(PORT, () => {
   console.log(`服務器運行在端口 ${PORT}`);
   console.log(`環境: ${process.env.NODE_ENV || 'development'}`);
   console.log(`OpenAI API Key: ${process.env.OPENAI_API_KEY ? '已設置' : '未設置'}`);
-});
-
-// 靜態文件服務（生產環境）
-if (process.env.NODE_ENV === 'production' || !process.env.NODE_ENV) {
-  app.use(express.static(path.join(__dirname, 'build')));
-  
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'build', 'index.html'));
-  });
-} 
+}); 
