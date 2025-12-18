@@ -1739,8 +1739,10 @@ function App() {
   const renderTranscriptionLogs = (episode: Episode) => {
     const logs = transcriptionLogs.get(episode.id) || [];
     const isShowing = showLogs.get(episode.id) || false;
+    const isTranscribing = transcribing.has(episode.id) || episode.transcriptStatus === 'processing';
     
-    if (!isShowing && logs.length === 0) {
+    // 如果沒有日誌且不在轉錄中，不顯示（但轉錄中或已完成時都顯示按鈕）
+    if (!isShowing && logs.length === 0 && !isTranscribing && episode.transcriptStatus !== 'completed' && episode.transcriptStatus !== 'error') {
       return null;
     }
     
@@ -1768,16 +1770,18 @@ function App() {
           onClick={() => toggleLogs(episode.id)}
           className="toggle-logs-button"
           style={{
-            background: 'none',
+            background: isTranscribing ? '#e3f2fd' : 'none',
             border: '1px solid #ddd',
             borderRadius: '4px',
             padding: '5px 10px',
             cursor: 'pointer',
             fontSize: '12px',
-            color: '#666'
+            color: isTranscribing ? '#1976d2' : '#666',
+            fontWeight: isTranscribing ? 'bold' : 'normal'
           }}
         >
           {isShowing ? '📋 隱藏日誌' : '📋 顯示日誌'} ({logs.length})
+          {isTranscribing && ' 🔄 即時更新中...'}
         </button>
         
         {isShowing && (
