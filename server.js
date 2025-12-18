@@ -118,11 +118,11 @@ let ffmpegAvailable = true;
 const transcriptionLogs = new Map();
 
 // 新增：日誌記錄函數
-function addTranscriptionLog(episodeId: string, level: 'info' | 'warn' | 'error' | 'success', message: string, stage?: string) {
+function addTranscriptionLog(episodeId, level, message, stage) {
   if (!transcriptionLogs.has(episodeId)) {
     transcriptionLogs.set(episodeId, []);
   }
-  const logs = transcriptionLogs.get(episodeId)!;
+  const logs = transcriptionLogs.get(episodeId);
   const memory = logMemoryUsage('', true); // 獲取記憶體資訊但不輸出
   logs.push({
     timestamp: new Date().toISOString(),
@@ -138,7 +138,7 @@ function addTranscriptionLog(episodeId: string, level: 'info' | 'warn' | 'error'
 }
 
 // 新增：清理舊日誌（完成後保留 5 分鐘）
-function cleanupLogs(episodeId: string) {
+function cleanupLogs(episodeId) {
   setTimeout(() => {
     transcriptionLogs.delete(episodeId);
     console.log(`已清理 ${episodeId} 的日誌`);
