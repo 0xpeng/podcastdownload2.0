@@ -616,6 +616,7 @@ app.post('/api/transcribe', (req, res) => {
         console.log(`  轉錄模式: 多片段（共 ${processedAudio.totalSegments} 個片段）`);
         const totalSegments = processedAudio.files.length;
         const CONCURRENT_LIMIT = 3; // 同時處理 3 個片段（可調整）
+        const SEGMENT_DURATION = 300; // 固定片段時長：5 分鐘（300 秒）
         
         console.log(`  🚀 啟用並行處理模式，同時處理 ${CONCURRENT_LIMIT} 個片段`);
         addTranscriptionLog(episodeId, 'info', `啟用並行處理模式，同時處理 ${CONCURRENT_LIMIT} 個片段`, '轉錄');
@@ -740,13 +741,36 @@ app.post('/api/transcribe', (req, res) => {
           totalSegments: 0
         };
         
+        // 使用固定片段時長計算偏移，確保時間戳準確
+        let cumulativeOffset = 0;
+        
         for (const result of results) {
           if (result.error) {
             console.error(`⚠️ 片段 ${result.index + 1} 處理失敗，跳過: ${result.error}`);
+            // 即使失敗，也要累加固定時長，保持後續片段時間戳正確
+            cumulativeOffset += SEGMENT_DURATION;
             continue;
           }
-          mergedResult = mergeTranscriptionIncremental(mergedResult, result.transcription, result.index + 1, totalSegments);
+          
+          // 使用固定偏移量（基於片段索引）而不是累加的 duration
+          // 這樣可以確保時間戳準確，即使 transcription.duration 不準確
+          const segmentOffset = result.index * SEGMENT_DURATION;
+          
+          mergedResult = mergeTranscriptionIncrementalWithOffset(
+            mergedResult, 
+            result.transcription, 
+            result.index + 1, 
+            totalSegments,
+            segmentOffset,
+            result.actualDuration || SEGMENT_DURATION
+          );
+          
+          // 累加實際時長（用於總時長計算）
+          cumulativeOffset += (result.actualDuration || SEGMENT_DURATION);
         }
+        
+        // 更新總時長為累加的實際時長
+        mergedResult.duration = cumulativeOffset;
         
         finalTranscription = mergedResult;
         console.log(`\n  ✅ 所有片段轉錄並合併完成，共 ${totalSegments} 個片段`);
@@ -1661,34 +1685,45 @@ function mergeTranscriptionIncremental(currentResult, newTranscription, segmentI
   };
 }
 
-// 合併多個轉錄結果（保留用於向後兼容）
+// 合併多個轉錄結果（保留用於向後兼容）- 使用固定偏移量修正時間戳
 function mergeTranscriptions(transcriptions) {
   let mergedText = '';
-  let totalDuration = 0;
   let allSegments = [];
+  const SEGMENT_DURATION = 300; // 固定片段時長：5 分鐘
   
   transcriptions.forEach((transcription, index) => {
+    // 使用固定偏移量（基於片段索引）而不是累加的 duration
+    const segmentOffset = index * SEGMENT_DURATION;
+    
     if (transcription.segments && transcription.segments.length > 0) {
-      // 調整時間戳（加上前面片段的總時長）
-      const adjustedSegments = transcription.segments.map(segment => ({
-        ...segment,
-        start: segment.start + totalDuration,
-        end: segment.end + totalDuration
-      }));
+      // 調整時間戳：使用固定的片段偏移量
+      const adjustedSegments = transcription.segments.map(segment => {
+        const adjustedStart = Math.max(0, segment.start) + segmentOffset;
+        const adjustedEnd = Math.max(0, segment.end) + segmentOffset;
+        
+        return {
+          ...segment,
+          start: adjustedStart,
+          end: adjustedEnd
+        };
+      });
       
       allSegments = allSegments.concat(adjustedSegments);
     }
     
     // 添加片段標識
     if (transcriptions.length > 1) {
-      mergedText += `\n=== 片段 ${index + 1} ===\n`;
+      mergedText += `\n=== 片段 ${index + 1} (偏移: ${formatTime(segmentOffset)}) ===\n`;
     }
     
     if (transcription.segments && transcription.segments.length > 0) {
       const segmentText = transcription.segments
         .map(segment => {
-          const startTime = formatTime(segment.start + totalDuration);
-          const endTime = formatTime(segment.end + totalDuration);
+          // 使用固定偏移量
+          const adjustedStart = Math.max(0, segment.start) + segmentOffset;
+          const adjustedEnd = Math.max(0, segment.end) + segmentOffset;
+          const startTime = formatTime(adjustedStart);
+          const endTime = formatTime(adjustedEnd);
           return `[${startTime} - ${endTime}] ${segment.text.trim()}`;
         })
         .join('\n\n');
@@ -1698,8 +1733,13 @@ function mergeTranscriptions(transcriptions) {
     }
     
     mergedText += '\n\n';
-    totalDuration += transcription.duration || 0;
   });
+  
+  // 計算總時長：最後一個片段的偏移量 + 最後一個片段的實際時長
+  const lastTranscription = transcriptions[transcriptions.length - 1];
+  const lastSegmentOffset = (transcriptions.length - 1) * SEGMENT_DURATION;
+  const lastSegmentDuration = lastTranscription?.duration || SEGMENT_DURATION;
+  const totalDuration = lastSegmentOffset + lastSegmentDuration;
   
   return {
     text: mergedText.trim(),
