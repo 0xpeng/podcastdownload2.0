@@ -145,10 +145,20 @@ function cleanupLogs(episodeId) {
   }, 5 * 60 * 1000); // 5 分鐘後清理
 }
 
+// 增加 Node.js 記憶體限制提示
+const memoryLimit = process.env.NODE_OPTIONS?.includes('--max-old-space-size') 
+  ? '已設置' 
+  : '預設（建議使用 --max-old-space-size=4096）';
+console.log(`📊 Node.js 記憶體配置: ${memoryLimit}`);
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 設置 Express server timeout（30 分鐘，足夠處理長音檔）
+// 增加請求體大小限制（用於大檔案上傳）
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+
+// 設置 Express server timeout（60 分鐘，用於處理超長音檔）
 app.timeout = 30 * 60 * 1000; // 30 分鐘
 console.log(`✅ Express server timeout 設置為: ${app.timeout / 1000 / 60} 分鐘`);
 
@@ -304,6 +314,10 @@ app.post('/api/transcribe', (req, res) => {
   console.log(`\n=== 增強版轉錄 API 請求開始 ===`);
   console.log(`請求時間: ${new Date().toISOString()}`);
   logMemoryUsage('請求開始');
+  
+  // 設置更長的 timeout（60 分鐘，用於處理超長音檔）
+  req.setTimeout(60 * 60 * 1000); // 60 分鐘
+  res.setTimeout(60 * 60 * 1000); // 60 分鐘
   
   // 初始化日誌
   const episodeId = req.body?.episodeId || 'unknown';
@@ -571,10 +585,17 @@ app.post('/api/transcribe', (req, res) => {
         finalTranscription = transcription;
         
       } else {
-        // 多片段轉錄
+        // 多片段轉錄 - 使用增量合併避免記憶體累積
         console.log(`  轉錄模式: 多片段（共 ${processedAudio.totalSegments} 個片段）`);
-        const transcriptions = [];
         const totalSegments = processedAudio.files.length;
+        
+        // 初始化增量合併狀態
+        let mergedResult = {
+          text: '',
+          duration: 0,
+          segments: [],
+          totalSegments: 0
+        };
         
         for (let i = 0; i < processedAudio.files.length; i++) {
           const segmentFile = processedAudio.files[i];
@@ -585,50 +606,70 @@ app.post('/api/transcribe', (req, res) => {
           
           // 嘗試使用 gpt-4o-transcribe，如果失敗則回退到 whisper-1
           let transcription;
-          try {
-            console.log(`    正在呼叫 OpenAI API...`);
-            addTranscriptionLog(episodeId, 'info', `片段 ${i + 1} 正在呼叫 OpenAI API...`, '轉錄');
-            transcription = await openai.audio.transcriptions.create({
-              file: fs.createReadStream(segmentFile),
-              model: 'gpt-4o-transcribe', // 嘗試使用新模型
-              language: 'zh',
-              response_format: 'verbose_json',
-              timestamp_granularities: ['word'],
-              prompt: optimizedPrompt
-            });
-          } catch (modelError) {
-            console.warn(`    ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
-            console.log(`    正在使用 whisper-1 模型...`);
-            transcription = await openai.audio.transcriptions.create({
-              file: fs.createReadStream(segmentFile),
-              model: 'whisper-1', // 回退到原模型
-              language: 'zh',
-              response_format: 'verbose_json',
-              timestamp_granularities: ['word'],
-              prompt: optimizedPrompt
-            });
+          let retryCount = 0;
+          const maxRetries = 3;
+          
+          while (retryCount < maxRetries) {
+            try {
+              console.log(`    正在呼叫 OpenAI API... (嘗試 ${retryCount + 1}/${maxRetries})`);
+              addTranscriptionLog(episodeId, 'info', `片段 ${i + 1} 正在呼叫 OpenAI API... (嘗試 ${retryCount + 1}/${maxRetries})`, '轉錄');
+              
+              transcription = await openai.audio.transcriptions.create({
+                file: fs.createReadStream(segmentFile),
+                model: 'gpt-4o-transcribe', // 嘗試使用新模型
+                language: 'zh',
+                response_format: 'verbose_json',
+                timestamp_granularities: ['word'],
+                prompt: optimizedPrompt
+              });
+              break; // 成功，跳出重試循環
+            } catch (modelError) {
+              retryCount++;
+              if (retryCount >= maxRetries) {
+                // 最後一次嘗試使用 whisper-1
+                console.warn(`    ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
+                console.log(`    正在使用 whisper-1 模型...`);
+                addTranscriptionLog(episodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1`, '轉錄');
+                transcription = await openai.audio.transcriptions.create({
+                  file: fs.createReadStream(segmentFile),
+                  model: 'whisper-1', // 回退到原模型
+                  language: 'zh',
+                  response_format: 'verbose_json',
+                  timestamp_granularities: ['word'],
+                  prompt: optimizedPrompt
+                });
+              } else {
+                // 等待後重試
+                console.warn(`    ⚠️ API 呼叫失敗，${2} 秒後重試... (${retryCount}/${maxRetries})`);
+                await new Promise(resolve => setTimeout(resolve, 2000));
+              }
+            }
           }
           
-          transcriptions.push(transcription);
+          // 增量合併：立即合併當前片段，避免累積記憶體
+          mergedResult = mergeTranscriptionIncremental(mergedResult, transcription, i + 1, totalSegments);
+          
           const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
           console.log(`    ✅ 片段 ${i + 1} 轉錄完成，耗時: ${segmentDuration} 秒`);
           logMemoryUsage(`片段 ${i + 1} 完成`);
           addTranscriptionLog(episodeId, 'success', `片段 ${i + 1} 轉錄完成，耗時: ${segmentDuration} 秒`, '轉錄');
           
-          // 片段間稍作延遲，避免API請求過快
+          // 強制垃圾回收（如果可用）
+          if (global.gc) {
+            global.gc();
+            console.log(`    🗑️ 已觸發垃圾回收`);
+          }
+          
+          // 片段間稍作延遲，避免API請求過快，並讓記憶體有時間釋放
           if (i < processedAudio.files.length - 1) {
-            console.log(`    等待 1 秒後處理下一個片段...`);
-            addTranscriptionLog(episodeId, 'info', '等待 1 秒後處理下一個片段...', '轉錄');
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            console.log(`    等待 2 秒後處理下一個片段（讓記憶體釋放）...`);
+            addTranscriptionLog(episodeId, 'info', '等待 2 秒後處理下一個片段...', '轉錄');
+            await new Promise(resolve => setTimeout(resolve, 2000));
           }
         }
         
-        // 合併所有轉錄結果
-        console.log(`\n  🔗 合併 ${transcriptions.length} 個轉錄結果...`);
-        const mergeStartTime = Date.now();
-        finalTranscription = mergeTranscriptions(transcriptions);
-        const mergeDuration = ((Date.now() - mergeStartTime) / 1000).toFixed(2);
-        console.log(`  ✅ 合併完成，耗時: ${mergeDuration} 秒`);
+        finalTranscription = mergedResult;
+        console.log(`\n  ✅ 所有片段轉錄並合併完成，共 ${totalSegments} 個片段`);
       }
       
       const transcriptionDuration = ((Date.now() - transcriptionStartTime) / 1000 / 60).toFixed(2);
@@ -1491,7 +1532,55 @@ async function processLargeAudio(audioFile, title) {
   }
 }
 
-// 合併多個轉錄結果
+// 增量合併轉錄結果（避免記憶體累積）
+function mergeTranscriptionIncremental(currentResult, newTranscription, segmentIndex, totalSegments) {
+  let mergedText = currentResult.text || '';
+  let totalDuration = currentResult.duration || 0;
+  let allSegments = currentResult.segments || [];
+  
+  // 添加片段標識（僅在多片段時）
+  if (totalSegments > 1) {
+    mergedText += `\n=== 片段 ${segmentIndex} ===\n`;
+  }
+  
+  if (newTranscription.segments && newTranscription.segments.length > 0) {
+    // 調整時間戳（加上前面片段的總時長）
+    const adjustedSegments = newTranscription.segments.map(segment => ({
+      ...segment,
+      start: segment.start + totalDuration,
+      end: segment.end + totalDuration
+    }));
+    
+    allSegments = allSegments.concat(adjustedSegments);
+    
+    // 生成文字
+    const segmentText = adjustedSegments
+      .map(segment => {
+        const startTime = formatTime(segment.start);
+        const endTime = formatTime(segment.end);
+        return `[${startTime} - ${endTime}] ${segment.text.trim()}`;
+      })
+      .join('\n\n');
+    mergedText += segmentText;
+  } else {
+    // 沒有 segments，使用 text
+    if (newTranscription.text) {
+      mergedText += newTranscription.text;
+    }
+  }
+  
+  mergedText += '\n\n';
+  totalDuration += newTranscription.duration || 0;
+  
+  return {
+    text: mergedText,
+    duration: totalDuration,
+    segments: allSegments,
+    totalSegments: segmentIndex
+  };
+}
+
+// 合併多個轉錄結果（保留用於向後兼容）
 function mergeTranscriptions(transcriptions) {
   let mergedText = '';
   let totalDuration = 0;
