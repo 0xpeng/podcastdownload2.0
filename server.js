@@ -500,11 +500,22 @@ app.post('/api/transcribe-from-url', async (req, res) => {
     
     let finalTranscription;
     
-    // 確定使用的語言（用於生成提示詞，如果 auto 則使用 zh 作為預設）
-    const promptLanguage = sourceLanguage === 'auto' ? 'zh' : sourceLanguage;
+    // 確定使用的語言（用於生成提示詞）
+    // 如果 auto，不傳遞 language 參數，讓 OpenAI 自動檢測
+    // 轉錄完成後，根據實際檢測到的語言生成對應語言的字幕
+    let promptLanguage = sourceLanguage === 'auto' ? null : sourceLanguage;
     
     // 生成優化的提示詞
-    let optimizedPrompt = TranscriptionOptimizer.generateOptimizedPrompt(promptLanguage, contentType);
+    let optimizedPrompt;
+    if (promptLanguage) {
+      optimizedPrompt = TranscriptionOptimizer.generateOptimizedPrompt(promptLanguage, contentType);
+    } else {
+      // 自動檢測模式：使用通用提示詞，不指定語言
+      // 使用英文作為通用提示詞（因為英文 podcast 較多）
+      optimizedPrompt = TranscriptionOptimizer.generateOptimizedPrompt('en', contentType);
+      // 或者使用更通用的提示詞
+      optimizedPrompt = `This is a podcast transcription. Please transcribe accurately with proper punctuation and formatting. Keep the original language of the audio.`;
+    }
     
     // 如果有 keywords，將其合併到 prompt 中
     if (keywords && keywords.trim()) {
@@ -513,7 +524,9 @@ app.post('/api/transcribe-from-url', async (req, res) => {
         const keywordsPart = keywords.trim();
         const remainingLength = 400 - keywordsPart.length - 2;
         if (remainingLength > 0) {
-          const basePrompt = TranscriptionOptimizer.generateOptimizedPrompt(promptLanguage, contentType);
+          const basePrompt = promptLanguage 
+            ? TranscriptionOptimizer.generateOptimizedPrompt(promptLanguage, contentType)
+            : `This is a podcast transcription. Please transcribe accurately with proper punctuation and formatting. Keep the original language of the audio.`;
           optimizedPrompt = `${keywordsPart}\n\n${basePrompt.substring(0, remainingLength)}`;
         } else {
           optimizedPrompt = keywordsPart.substring(0, 400);
@@ -526,8 +539,8 @@ app.post('/api/transcribe-from-url', async (req, res) => {
     }
     
     // 記錄語言設置
-    console.log(`語言設置: ${sourceLanguage === 'auto' ? '自動檢測' : sourceLanguage}`);
-    addTranscriptionLog(finalEpisodeId, 'info', `語言設置: ${sourceLanguage === 'auto' ? '自動檢測' : sourceLanguage}`, '初始化');
+    console.log(`語言設置: ${sourceLanguage === 'auto' ? '自動檢測（將根據實際內容生成對應語言字幕）' : sourceLanguage}`);
+    addTranscriptionLog(finalEpisodeId, 'info', `語言設置: ${sourceLanguage === 'auto' ? '自動檢測（將根據實際內容生成對應語言字幕）' : sourceLanguage}`, '初始化');
     
     if (processedAudio.type === 'single') {
       // 單一檔案轉錄
@@ -561,22 +574,43 @@ app.post('/api/transcribe-from-url', async (req, res) => {
         addTranscriptionLog(finalEpisodeId, 'success', `使用 gpt-4o-transcribe 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
       } catch (modelError) {
         console.warn(`  ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
+        
+        // 記錄詳細錯誤信息
+        if (modelError.response) {
+          const status = modelError.response.status;
+          const statusText = modelError.response.statusText;
+          const errorData = modelError.response.data || {};
+          console.error(`  API 響應錯誤: ${status} ${statusText}`, errorData);
+          addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${status} ${statusText} - ${errorData.error?.message || modelError.message}`, '轉錄');
+        } else if (modelError.code) {
+          console.error(`  錯誤代碼: ${modelError.code}`);
+          addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
+        }
+        
         console.log('  正在使用 whisper-1 模型...');
         addTranscriptionLog(finalEpisodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1`, '轉錄');
         
-        const fallbackParams = {
-          file: fs.createReadStream(processedAudio.file),
-          model: 'whisper-1',
-          response_format: 'verbose_json',
-          timestamp_granularities: ['word'],
-          prompt: optimizedPrompt
-        };
-        
-        if (sourceLanguage && sourceLanguage !== 'auto') {
-          fallbackParams.language = sourceLanguage;
+        try {
+          const fallbackParams = {
+            file: fs.createReadStream(processedAudio.file),
+            model: 'whisper-1',
+            response_format: 'verbose_json',
+            timestamp_granularities: ['word'],
+            prompt: optimizedPrompt
+          };
+          
+          if (sourceLanguage && sourceLanguage !== 'auto') {
+            fallbackParams.language = sourceLanguage;
+          }
+          
+          transcription = await openai.audio.transcriptions.create(fallbackParams);
+          console.log(`  ✅ 使用 whisper-1 模型轉錄成功`);
+          addTranscriptionLog(finalEpisodeId, 'success', `使用 whisper-1 模型轉錄成功`, '轉錄');
+        } catch (fallbackError) {
+          console.error(`  ❌ whisper-1 回退也失敗:`, fallbackError.message);
+          addTranscriptionLog(finalEpisodeId, 'error', `whisper-1 回退也失敗: ${fallbackError.message}`, '錯誤');
+          throw fallbackError;
         }
-        
-        transcription = await openai.audio.transcriptions.create(fallbackParams);
       }
       
       finalTranscription = transcription;
@@ -623,28 +657,54 @@ app.post('/api/transcribe-from-url', async (req, res) => {
             break;
           } catch (modelError) {
             retryCount++;
+            
+            // 記錄詳細錯誤信息
+            console.error(`    ❌ API 調用錯誤 (嘗試 ${retryCount}/${maxRetries}):`, modelError.message);
+            
+            // 記錄 API 響應錯誤詳情
+            if (modelError.response) {
+              const status = modelError.response.status;
+              const statusText = modelError.response.statusText;
+              const errorData = modelError.response.data || {};
+              console.error(`    API 響應錯誤: ${status} ${statusText}`, errorData);
+              addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${status} ${statusText} - ${errorData.error?.message || modelError.message}`, '轉錄');
+            } else if (modelError.code) {
+              console.error(`    錯誤代碼: ${modelError.code}`);
+              addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
+            } else {
+              addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${modelError.message}`, '轉錄');
+            }
+            
             if (retryCount >= maxRetries) {
               console.warn(`    ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
               console.log(`    正在使用 whisper-1 模型...`);
               addTranscriptionLog(finalEpisodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1`, '轉錄');
               
-              const fallbackParams = {
-                file: fs.createReadStream(segmentFile),
-                model: 'whisper-1',
-                response_format: 'verbose_json',
-                timestamp_granularities: ['word'],
-                prompt: optimizedPrompt
-              };
-              
-              if (sourceLanguage && sourceLanguage !== 'auto') {
-                fallbackParams.language = sourceLanguage;
+              try {
+                const fallbackParams = {
+                  file: fs.createReadStream(segmentFile),
+                  model: 'whisper-1',
+                  response_format: 'verbose_json',
+                  timestamp_granularities: ['word'],
+                  prompt: optimizedPrompt
+                };
+                
+                if (sourceLanguage && sourceLanguage !== 'auto') {
+                  fallbackParams.language = sourceLanguage;
+                }
+                
+                transcription = await openai.audio.transcriptions.create(fallbackParams);
+                console.log(`    ✅ 使用 whisper-1 模型轉錄成功`);
+                addTranscriptionLog(finalEpisodeId, 'success', `使用 whisper-1 模型轉錄成功`, '轉錄');
+              } catch (fallbackError) {
+                console.error(`    ❌ whisper-1 回退也失敗:`, fallbackError.message);
+                addTranscriptionLog(finalEpisodeId, 'error', `whisper-1 回退也失敗: ${fallbackError.message}`, '錯誤');
+                throw fallbackError;
               }
-              
-              transcription = await openai.audio.transcriptions.create(fallbackParams);
             } else {
               const retryDelay = Math.min(500 * Math.pow(2, retryCount - 1), 2000);
               console.warn(`    ⚠️ API 呼叫失敗，${retryDelay}ms 後重試... (${retryCount}/${maxRetries})`);
-              addTranscriptionLog(finalEpisodeId, 'warn', `API 呼叫失敗，${retryDelay}ms 後重試...`, '轉錄');
+              addTranscriptionLog(finalEpisodeId, 'warn', `API 呼叫失敗，${retryDelay}ms 後重試... (${retryCount}/${maxRetries})`, '轉錄');
               await new Promise(resolve => setTimeout(resolve, retryDelay));
             }
           }
@@ -737,14 +797,55 @@ app.post('/api/transcribe-from-url', async (req, res) => {
     logMemoryUsage('轉錄完成');
     addTranscriptionLog(finalEpisodeId, 'success', `[階段 2/4] 轉錄完成，總耗時: ${transcriptionDuration} 分鐘`, '轉錄');
     
-    // 7. 錯字檢查與修正
+    // 檢測轉錄結果的實際語言
+    let detectedLanguage = 'en'; // 默認
+    if (finalTranscription.language) {
+      detectedLanguage = finalTranscription.language;
+      console.log(`✅ 從轉錄結果檢測到語言: ${detectedLanguage}`);
+      addTranscriptionLog(finalEpisodeId, 'info', `從轉錄結果檢測到語言: ${detectedLanguage}`, '轉錄');
+    } else if (sourceLanguage !== 'auto') {
+      detectedLanguage = sourceLanguage;
+      console.log(`✅ 使用指定的語言: ${detectedLanguage}`);
+      addTranscriptionLog(finalEpisodeId, 'info', `使用指定的語言: ${detectedLanguage}`, '轉錄');
+    } else {
+      // 簡單的語言檢測：檢查文字內容
+      const text = finalTranscription.text || '';
+      // 如果主要是英文字符，判斷為英文
+      const englishCharCount = (text.match(/[a-zA-Z]/g) || []).length;
+      const chineseCharCount = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+      const totalCharCount = text.length;
+      
+      // 計算比例
+      const englishRatio = totalCharCount > 0 ? englishCharCount / totalCharCount : 0;
+      const chineseRatio = totalCharCount > 0 ? chineseCharCount / totalCharCount : 0;
+      
+      if (englishRatio > 0.5 || (englishCharCount > chineseCharCount * 2 && englishCharCount > 100)) {
+        detectedLanguage = 'en';
+      } else if (chineseRatio > 0.3 || chineseCharCount > 50) {
+        detectedLanguage = 'zh';
+      } else {
+        // 默認使用英文
+        detectedLanguage = 'en';
+      }
+      
+      console.log(`✅ 通過文字分析檢測到語言: ${detectedLanguage} (英文字符: ${englishCharCount}, 中文字符: ${chineseCharCount})`);
+      addTranscriptionLog(finalEpisodeId, 'info', `通過文字分析檢測到語言: ${detectedLanguage} (英文字符: ${englishCharCount}, 中文字符: ${chineseCharCount})`, '轉錄');
+    }
+    
+    // 將檢測到的語言保存到轉錄結果中
+    if (!finalTranscription.language) {
+      finalTranscription.language = detectedLanguage;
+    }
+    
+    // 7. 錯字檢查與修正（使用檢測到的語言）
     console.log(`\n🔍 [階段 3/4] 開始錯字檢查與修正`);
     const spellCheckStartTime = Date.now();
     logMemoryUsage('錯字檢查開始');
-    addTranscriptionLog(finalEpisodeId, 'info', '[階段 3/4] 開始錯字檢查與修正', '錯字檢查');
+    addTranscriptionLog(finalEpisodeId, 'info', `[階段 3/4] 開始錯字檢查與修正（語言: ${detectedLanguage}）`, '錯字檢查');
     let correctedTranscription = finalTranscription;
     try {
-      correctedTranscription = await checkAndCorrectSpelling(finalTranscription, finalTranscription.language || 'zh', contentType);
+      // 使用檢測到的語言進行錯字檢查
+      correctedTranscription = await checkAndCorrectSpelling(finalTranscription, detectedLanguage, contentType);
       const spellCheckDuration = ((Date.now() - spellCheckStartTime) / 1000).toFixed(2);
       console.log(`✅ [階段 3/4] 錯字檢查完成，耗時: ${spellCheckDuration} 秒`);
       logMemoryUsage('錯字檢查完成');
@@ -2305,6 +2406,52 @@ function mergeTranscriptionIncremental(currentResult, newTranscription, segmentI
   return {
     text: mergedText,
     duration: totalDuration,
+    segments: allSegments,
+    totalSegments: segmentIndex
+  };
+}
+
+// 增量合併轉錄結果（使用固定偏移量，確保時間戳準確）
+function mergeTranscriptionIncrementalWithOffset(currentResult, newTranscription, segmentIndex, totalSegments, segmentOffset, segmentDuration) {
+  let mergedText = currentResult.text || '';
+  let allSegments = currentResult.segments || [];
+  
+  // 添加片段標識（僅在多片段時）
+  if (totalSegments > 1) {
+    mergedText += `\n=== 片段 ${segmentIndex} ===\n`;
+  }
+  
+  if (newTranscription.segments && newTranscription.segments.length > 0) {
+    // 調整時間戳（使用固定偏移量）
+    const adjustedSegments = newTranscription.segments.map(segment => ({
+      ...segment,
+      start: Math.max(0, segment.start) + segmentOffset,
+      end: Math.max(0, segment.end) + segmentOffset
+    }));
+    
+    allSegments = allSegments.concat(adjustedSegments);
+    
+    // 生成文字
+    const segmentText = adjustedSegments
+      .map(segment => {
+        const startTime = formatTime(segment.start);
+        const endTime = formatTime(segment.end);
+        return `[${startTime} - ${endTime}] ${segment.text.trim()}`;
+      })
+      .join('\n\n');
+    mergedText += segmentText;
+  } else {
+    // 沒有 segments，使用 text
+    if (newTranscription.text) {
+      mergedText += newTranscription.text;
+    }
+  }
+  
+  mergedText += '\n\n';
+  
+  return {
+    text: mergedText,
+    duration: currentResult.duration || 0, // 將由調用者更新
     segments: allSegments,
     totalSegments: segmentIndex
   };
