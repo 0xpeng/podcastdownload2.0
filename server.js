@@ -548,7 +548,7 @@ app.post('/api/transcribe', (req, res) => {
         }
         console.log(`使用優化提示詞（含關鍵字）: ${optimizedPrompt.substring(0, 100)}...`);
       } else {
-        console.log(`使用優化提示詞: ${optimizedPrompt}`);
+      console.log(`使用優化提示詞: ${optimizedPrompt}`);
       }
       
       // 記錄語言設置
@@ -568,11 +568,11 @@ app.post('/api/transcribe', (req, res) => {
           
           // 構建轉錄參數
           const transcriptionParams = {
-            file: fs.createReadStream(processedAudio.file),
+          file: fs.createReadStream(processedAudio.file),
             model: 'gpt-4o-transcribe', // 嘗試使用新模型
-            response_format: 'verbose_json',
-            timestamp_granularities: ['word'],
-            prompt: optimizedPrompt
+          response_format: 'verbose_json',
+          timestamp_granularities: ['word'],
+          prompt: optimizedPrompt
           };
           
           // 只有當不是 'auto' 時才傳遞 language 參數
@@ -612,26 +612,21 @@ app.post('/api/transcribe', (req, res) => {
         finalTranscription = transcription;
         
       } else {
-        // 多片段轉錄 - 使用增量合併避免記憶體累積
+        // 多片段轉錄 - 使用並行處理加速，同時處理多個片段
         console.log(`  轉錄模式: 多片段（共 ${processedAudio.totalSegments} 個片段）`);
         const totalSegments = processedAudio.files.length;
+        const CONCURRENT_LIMIT = 3; // 同時處理 3 個片段（可調整）
         
-        // 初始化增量合併狀態
-        let mergedResult = {
-          text: '',
-          duration: 0,
-          segments: [],
-          totalSegments: 0
-        };
+        console.log(`  🚀 啟用並行處理模式，同時處理 ${CONCURRENT_LIMIT} 個片段`);
+        addTranscriptionLog(episodeId, 'info', `啟用並行處理模式，同時處理 ${CONCURRENT_LIMIT} 個片段`, '轉錄');
         
-        for (let i = 0; i < processedAudio.files.length; i++) {
-          const segmentFile = processedAudio.files[i];
+        // 處理單個片段的函數（帶重試機制）
+        async function processSegmentWithRetry(segmentFile, segmentIndex, totalSegments) {
           const segmentStartTime = Date.now();
-          console.log(`\n  📝 片段 ${i + 1}/${totalSegments}: ${path.basename(segmentFile)}`);
-          logMemoryUsage(`片段 ${i + 1} 開始`);
-          addTranscriptionLog(episodeId, 'info', `片段 ${i + 1}/${totalSegments}: ${path.basename(segmentFile)}`, '轉錄');
+          console.log(`\n  📝 片段 ${segmentIndex}/${totalSegments}: ${path.basename(segmentFile)}`);
+          logMemoryUsage(`片段 ${segmentIndex} 開始`);
+          addTranscriptionLog(episodeId, 'info', `片段 ${segmentIndex}/${totalSegments}: ${path.basename(segmentFile)}`, '轉錄');
           
-          // 嘗試使用 gpt-4o-transcribe，如果失敗則回退到 whisper-1
           let transcription;
           let retryCount = 0;
           const maxRetries = 3;
@@ -639,15 +634,15 @@ app.post('/api/transcribe', (req, res) => {
           while (retryCount < maxRetries) {
             try {
               console.log(`    正在呼叫 OpenAI API... (嘗試 ${retryCount + 1}/${maxRetries})`);
-              addTranscriptionLog(episodeId, 'info', `片段 ${i + 1} 正在呼叫 OpenAI API... (嘗試 ${retryCount + 1}/${maxRetries})`, '轉錄');
+              addTranscriptionLog(episodeId, 'info', `片段 ${segmentIndex} 正在呼叫 OpenAI API... (嘗試 ${retryCount + 1}/${maxRetries})`, '轉錄');
               
               // 構建轉錄參數
               const transcriptionParams = {
-                file: fs.createReadStream(segmentFile),
+            file: fs.createReadStream(segmentFile),
                 model: 'gpt-4o-transcribe', // 嘗試使用新模型
-                response_format: 'verbose_json',
-                timestamp_granularities: ['word'],
-                prompt: optimizedPrompt
+            response_format: 'verbose_json',
+            timestamp_granularities: ['word'],
+            prompt: optimizedPrompt
               };
               
               // 只有當不是 'auto' 時才傳遞 language 參數
@@ -681,37 +676,81 @@ app.post('/api/transcribe', (req, res) => {
                 
                 transcription = await openai.audio.transcriptions.create(fallbackParams);
               } else {
-                // 等待後重試
-                console.warn(`    ⚠️ API 呼叫失敗，${2} 秒後重試... (${retryCount}/${maxRetries})`);
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                // 指數退避重試：500ms, 1000ms, 2000ms
+                const retryDelay = Math.min(500 * Math.pow(2, retryCount - 1), 2000);
+                console.warn(`    ⚠️ API 呼叫失敗，${retryDelay}ms 後重試... (${retryCount}/${maxRetries})`);
+                addTranscriptionLog(episodeId, 'warn', `API 呼叫失敗，${retryDelay}ms 後重試...`, '轉錄');
+                await new Promise(resolve => setTimeout(resolve, retryDelay));
               }
             }
           }
           
-          // 增量合併：立即合併當前片段，避免累積記憶體
-          mergedResult = mergeTranscriptionIncremental(mergedResult, transcription, i + 1, totalSegments);
-          
           const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
-          console.log(`    ✅ 片段 ${i + 1} 轉錄完成，耗時: ${segmentDuration} 秒`);
-          logMemoryUsage(`片段 ${i + 1} 完成`);
-          addTranscriptionLog(episodeId, 'success', `片段 ${i + 1} 轉錄完成，耗時: ${segmentDuration} 秒`, '轉錄');
+          console.log(`    ✅ 片段 ${segmentIndex} 轉錄完成，耗時: ${segmentDuration} 秒`);
+          logMemoryUsage(`片段 ${segmentIndex} 完成`);
+          addTranscriptionLog(episodeId, 'success', `片段 ${segmentIndex} 轉錄完成，耗時: ${segmentDuration} 秒`, '轉錄');
           
-          // 強制垃圾回收（如果可用）
-          if (global.gc) {
-            global.gc();
-            console.log(`    🗑️ 已觸發垃圾回收`);
+          return { index: segmentIndex - 1, transcription }; // index 從 0 開始
+        }
+        
+        // 並行處理所有片段，但限制並發數
+        const results = [];
+        const activePromises = new Set();
+        
+        async function processWithConcurrencyLimit(segmentFile, segmentIndex, totalSegments) {
+          // 如果達到並發限制，等待至少一個完成
+          while (activePromises.size >= CONCURRENT_LIMIT) {
+            await Promise.race(Array.from(activePromises));
           }
           
-          // 片段間稍作延遲，避免API請求過快，並讓記憶體有時間釋放
-          if (i < processedAudio.files.length - 1) {
-            console.log(`    等待 2 秒後處理下一個片段（讓記憶體釋放）...`);
-            addTranscriptionLog(episodeId, 'info', '等待 2 秒後處理下一個片段...', '轉錄');
-            await new Promise(resolve => setTimeout(resolve, 2000));
+          const promise = processSegmentWithRetry(segmentFile, segmentIndex, totalSegments)
+            .then(result => {
+              results.push(result);
+              activePromises.delete(promise);
+              return result;
+            })
+            .catch(error => {
+              console.error(`片段 ${segmentIndex} 處理失敗:`, error);
+              addTranscriptionLog(episodeId, 'error', `片段 ${segmentIndex} 處理失敗: ${error.message}`, '錯誤');
+              activePromises.delete(promise);
+              // 返回一個錯誤標記，後續處理時可以跳過
+              return { index: segmentIndex - 1, error: error.message };
+            });
+          
+          activePromises.add(promise);
+          return promise;
+        }
+        
+        // 啟動所有片段的處理
+        const allPromises = [];
+        for (let i = 0; i < processedAudio.files.length; i++) {
+          allPromises.push(processWithConcurrencyLimit(processedAudio.files[i], i + 1, totalSegments));
+        }
+        
+        // 等待所有片段完成
+        await Promise.all(allPromises);
+        
+        // 按順序合併結果
+        results.sort((a, b) => a.index - b.index);
+        
+        let mergedResult = {
+          text: '',
+          duration: 0,
+          segments: [],
+          totalSegments: 0
+        };
+        
+        for (const result of results) {
+          if (result.error) {
+            console.error(`⚠️ 片段 ${result.index + 1} 處理失敗，跳過: ${result.error}`);
+            continue;
           }
+          mergedResult = mergeTranscriptionIncremental(mergedResult, result.transcription, result.index + 1, totalSegments);
         }
         
         finalTranscription = mergedResult;
         console.log(`\n  ✅ 所有片段轉錄並合併完成，共 ${totalSegments} 個片段`);
+        addTranscriptionLog(episodeId, 'success', `所有片段轉錄並合併完成，共 ${totalSegments} 個片段`, '轉錄');
       }
       
       const transcriptionDuration = ((Date.now() - transcriptionStartTime) / 1000 / 60).toFixed(2);
@@ -1275,35 +1314,35 @@ function compressAudio(inputPath, outputPath) {
     console.log(`    輸入檔案: ${path.basename(inputPath)}`);
     logMemoryUsage('壓縮開始');
     
-    // 嘗試不同的編解碼器配置
+    // 嘗試不同的編解碼器配置（優化：使用 48k 比特率以加快壓縮速度）
     const codecConfigs = [
       // 配置 1: 嘗試 libmp3lame (最佳)
       {
         codec: 'libmp3lame',
         format: 'mp3',
         ext: '.mp3',
-        bitrate: '64k'
+        bitrate: '48k'  // 優化：降低比特率以加快壓縮
       },
       // 配置 2: 嘗試 mp3 (備用)
       {
         codec: 'mp3',
         format: 'mp3', 
         ext: '.mp3',
-        bitrate: '64k'
+        bitrate: '48k'  // 優化：降低比特率以加快壓縮
       },
       // 配置 3: 使用 AAC (通用支持)
       {
         codec: 'aac',
         format: 'mp4',
         ext: '.m4a',
-        bitrate: '64k'
+        bitrate: '48k'  // 優化：降低比特率以加快壓縮
       },
       // 配置 4: 使用 libvorbis + ogg (開源)
       {
         codec: 'libvorbis',
         format: 'ogg',
         ext: '.ogg',
-        bitrate: '64k'
+        bitrate: '48k'  // 優化：降低比特率以加快壓縮
       },
       // 配置 5: 最基本的 PCM 重採樣 (總是可用)
       {
@@ -1494,7 +1533,7 @@ async function processLargeAudio(audioFile, title) {
     // 步驟 2: 壓縮後還是太大，需要分割
     console.log('  步驟 2/2: 壓縮後仍超過限制，開始分割音檔...');
     const segmentDir = path.join(tempDir, `${baseFilename}_segments`);
-    const segmentFiles = await splitAudio(actualCompressedPath, segmentDir, 600); // 10分鐘片段
+    const segmentFiles = await splitAudio(actualCompressedPath, segmentDir, 300); // 5分鐘片段（優化：更小的片段處理更快）
     
     // 新增：驗證所有分割片段
     console.log('驗證分割片段格式...');
@@ -1677,9 +1716,9 @@ if (process.env.NODE_ENV === 'production' || !process.env.NODE_ENV) {
   const buildPath = path.join(__dirname, 'build');
   if (fs.existsSync(buildPath)) {
     app.use(express.static(buildPath));
-    
+  
     // 所有其他路由都返回 index.html（用於 React Router）
-    app.get('*', (req, res) => {
+  app.get('*', (req, res) => {
       res.sendFile(path.join(buildPath, 'index.html'));
     });
     console.log('✅ 靜態檔案服務已啟用，build 目錄:', buildPath);
