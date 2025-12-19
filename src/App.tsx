@@ -1152,6 +1152,7 @@ function App() {
   // 新增：增強轉錄上傳函數
   const uploadForEnhancedTranscription = async (audioBlob: Blob, episode: Episode) => {
     console.log(`準備上傳音檔進行增強轉錄，檔案大小: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
+    console.log(`Blob type: ${audioBlob.type || '未設置'}`);
     
     // 更新進度：開始上傳
     setTranscriptProgress(prev => {
@@ -1160,8 +1161,22 @@ function App() {
       return newMap;
     });
     
+    // 清理檔案名稱，移除特殊字符，避免上傳錯誤
+    const sanitizedTitle = episode.title
+      .replace(/[^a-zA-Z0-9\u4e00-\u9fa5\s\-_]/g, '_') // 只保留字母、數字、中文、空格、連字號、底線
+      .replace(/\s+/g, '_') // 空格替換為底線
+      .substring(0, 100); // 限制長度
+    
+    // 確保 Blob 有正確的 MIME type
+    const typedBlob = audioBlob.type && audioBlob.type !== 'application/octet-stream'
+      ? audioBlob 
+      : new Blob([audioBlob], { type: 'audio/mpeg' }); // 如果沒有 type 或是不明確的類型，設置為 audio/mpeg
+    
+    console.log(`清理後的檔案名稱: ${sanitizedTitle}.mp3`);
+    console.log(`使用的 Blob type: ${typedBlob.type}`);
+    
     const formData = new FormData();
-    formData.append('audio', audioBlob, `${episode.title}.mp3`);
+    formData.append('audio', typedBlob, `${sanitizedTitle}.mp3`);
     formData.append('title', episode.title);
     formData.append('episodeId', episode.id);
     formData.append('outputFormats', transcriptionSettings.outputFormats.join(','));

@@ -406,9 +406,40 @@ app.post('/api/transcribe', (req, res) => {
     }
 
     if (!audioFile) {
-      console.log('沒有找到音檔');
-      return res.status(400).json({ error: '沒有找到音檔' });
+      console.error('❌ 沒有找到音檔');
+      console.error('接收到的 files:', JSON.stringify(Object.keys(files), null, 2));
+      console.error('接收到的 fields:', JSON.stringify(Object.keys(fields), null, 2));
+      return res.status(400).json({ 
+        error: '沒有找到音檔',
+        details: 'FormData 中沒有找到 audio 欄位',
+        suggestion: '請確認前端正確使用 FormData.append("audio", blob) 上傳檔案'
+      });
     }
+    
+    // 檢查檔案大小
+    if (audioFile.size > 30 * 1024 * 1024) {
+      console.error(`❌ 檔案太大: ${(audioFile.size / 1024 / 1024).toFixed(2)}MB`);
+      return res.status(413).json({ 
+        error: '檔案大小超過限制',
+        currentSize: `${(audioFile.size / 1024 / 1024).toFixed(2)}MB`,
+        maxSize: '30MB',
+        suggestions: [
+          '檔案會自動壓縮和分割處理',
+          '如果持續失敗，請嘗試使用較小的音檔'
+        ]
+      });
+    }
+    
+    // 檢查檔案是否為空
+    if (audioFile.size === 0) {
+      console.error('❌ 檔案為空');
+      return res.status(400).json({ 
+        error: '上傳的檔案為空',
+        suggestion: '請確認音檔下載完整'
+      });
+    }
+    
+    console.log(`✅ 音檔驗證通過: ${(audioFile.size / 1024 / 1024).toFixed(2)}MB, 類型: ${audioFile.mimetype || '未知'}`);
 
     const fileSizeMB = (audioFile.size / 1024 / 1024).toFixed(2);
     const estimatedDuration = Math.ceil((audioFile.size / 1024 / 1024) * 0.5); // 粗略估算：1MB ≈ 0.5 分鐘
