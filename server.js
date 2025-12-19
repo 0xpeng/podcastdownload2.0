@@ -1325,8 +1325,8 @@ function downloadAudio(url, callback, maxRedirects = 5) {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept': 'audio/mpeg, audio/mp3, audio/mp4, audio/*, */*',
         'Accept-Encoding': 'identity',
-        'Connection': 'keep-alive',
-        'Range': undefined // 明確不設置 Range，確保完整下載
+        'Connection': 'keep-alive'
+        // 注意：不設置 Range header，確保完整下載
       },
       timeout: 120000 // 增加到 2 分鐘
     }, (response) => {
