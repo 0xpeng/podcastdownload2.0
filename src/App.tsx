@@ -1229,23 +1229,29 @@ function App() {
       if (response.status === 402) {
         throw new Error('OpenAI API 額度不足，請檢查帳戶餘額');
       } else if (response.status === 400) {
-        throw new Error('音檔格式不支援或檔案損壞，請嘗試使用 MP3 或 WAV 格式');
+        // 更詳細的 400 錯誤訊息
+        const details = errorData.details || '';
+        const suggestion = errorData.suggestion || '請確認音檔格式正確（支援 MP3, WAV, M4A 等）';
+        throw new Error(`上傳失敗: ${errorData.error || '音檔格式不支援或檔案損壞'}\n\n詳情: ${details}\n\n建議: ${suggestion}`);
+      } else if (response.status === 413) {
+        // 檔案大小超過限制
+        const suggestionText = errorData.suggestions 
+          ? errorData.suggestions.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n")
+          : '檔案會自動壓縮和分割處理';
+        const detailedMessage = [ 
+          errorData.error || "檔案大小超過限制", 
+          "", 
+          `目前檔案大小：${errorData.currentSize || "未知"}`, 
+          `最大限制：${errorData.maxSize || "30MB"}`, 
+          "", 
+          "💡 解決方案：", 
+          suggestionText 
+        ].join("\n"); 
+        throw new Error(detailedMessage);
       } else {
-        if (response.status === 413 && errorData.suggestions) { 
-          const suggestionText = errorData.suggestions.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n"); 
-          const detailedMessage = [ 
-            errorData.error || "檔案大小超過限制", 
-            "", 
-            `目前檔案大小：${errorData.currentSize || "未知"}`, 
-            `最大限制：${errorData.maxSize || "25MB"}`, 
-            "", 
-            "💡 解決方案：", 
-            suggestionText 
-          ].join("\n"); 
-          throw new Error(detailedMessage); 
-        } else { 
-          throw new Error(`增強轉錄服務錯誤 (${response.status}): ${errorData.error || errorText}`); 
-        }
+        const details = errorData.details ? `\n詳情: ${errorData.details}` : '';
+        const suggestion = errorData.suggestion ? `\n建議: ${errorData.suggestion}` : '';
+        throw new Error(`增強轉錄服務錯誤 (${response.status}): ${errorData.error || errorText}${details}${suggestion}`); 
       }
     }
 
