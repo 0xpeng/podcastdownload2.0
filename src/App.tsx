@@ -535,7 +535,8 @@ const mockEpisodes: Episode[] = [
 
 function App() {
   const [rssUrl, setRssUrl] = useState('https://feeds.soundon.fm/podcasts/066b9fb0-0c9a-417f-a97b-57d04bcc6aca.xml');
-  const [episodes, setEpisodes] = useState<Episode[]>(mockEpisodes);
+  // 改為空陣列，避免用戶誤用示例數據
+  const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
