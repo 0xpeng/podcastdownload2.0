@@ -1095,14 +1095,21 @@ function App() {
       }
 
       const contentLength = response.headers.get('content-length');
+      const contentType = response.headers.get('content-type') || 'audio/mpeg'; // 獲取 Content-Type，預設為 audio/mpeg
+      
       if (contentLength) {
         console.log(`音檔大小: ${(parseInt(contentLength) / 1024 / 1024).toFixed(2)}MB`);
       }
+      console.log(`音檔 Content-Type: ${contentType}`);
 
+      // 確保 Blob 有正確的 MIME type
       const audioBlob = await response.blob();
-      console.log(`音檔下載完成，實際大小: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
+      const typedBlob = new Blob([audioBlob], { type: contentType });
       
-      return audioBlob;
+      console.log(`音檔下載完成，實際大小: ${(typedBlob.size / 1024 / 1024).toFixed(2)}MB`);
+      console.log(`Blob type: ${typedBlob.type}`);
+      
+      return typedBlob;
     } catch (error) {
       console.error('後端代理下載失敗，嘗試使用 CORS 代理:', error);
       

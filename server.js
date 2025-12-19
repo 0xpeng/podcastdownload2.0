@@ -364,7 +364,31 @@ app.post('/api/transcribe', (req, res) => {
   form.parse(req, async (err, fields, files) => {
     if (err) {
       console.error('表單解析錯誤:', err);
-      return res.status(400).json({ error: `表單解析失敗: ${err.message}` });
+      console.error('錯誤詳情:', {
+        message: err.message,
+        code: err.code,
+        httpCode: err.httpCode,
+        stack: err.stack
+      });
+      return res.status(400).json({ 
+        error: `表單解析失敗: ${err.message}`,
+        details: err.code || 'UNKNOWN_ERROR',
+        suggestion: err.code === 'LIMIT_FILE_SIZE' ? '檔案大小超過 30MB 限制' : '請檢查檔案格式和大小'
+      });
+    }
+    
+    // 詳細日誌：記錄接收到的檔案資訊
+    console.log('接收到的檔案資訊:');
+    console.log('  - files.audio 是否存在:', !!files.audio?.[0]);
+    if (files.audio?.[0]) {
+      console.log('  - 原始檔案名:', files.audio[0].originalFilename);
+      console.log('  - MIME 類型:', files.audio[0].mimetype);
+      console.log('  - 檔案大小:', `${(files.audio[0].size / 1024 / 1024).toFixed(2)}MB`);
+      console.log('  - 臨時檔案路徑:', files.audio[0].filepath);
+    } else {
+      console.error('  - 錯誤: 沒有找到 audio 檔案');
+      console.error('  - 接收到的 files keys:', Object.keys(files));
+      console.error('  - 接收到的 fields keys:', Object.keys(fields));
     }
     
     const audioFile = files.audio?.[0];
