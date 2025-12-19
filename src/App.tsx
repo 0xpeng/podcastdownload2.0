@@ -856,33 +856,72 @@ function App() {
     ));
 
     try {
-      // 1. 下載音檔
-      console.log('步驟 1: 開始下載音檔...');
+      // 使用新的直接 URL 轉錄 API（支援大檔案，不經過前端上傳）
+      console.log('使用直接 URL 轉錄 API（支援大檔案）...');
       setTranscriptProgress(prev => {
         const newMap = new Map(prev);
         newMap.set(episode.id, 10);
         return newMap;
       });
       
-      const startDownload = Date.now();
-      const audioBlob = await downloadAudioForTranscription(episode.audioUrl);
-      const downloadTime = Date.now() - startDownload;
-      console.log(`音檔下載完成，耗時: ${downloadTime}ms，大小: ${(audioBlob.size / 1024 / 1024).toFixed(2)}MB`);
+      // 開始輪詢日誌
+      const logPollingInterval = setInterval(async () => {
+        try {
+          const response = await fetch(`/api/transcribe-logs/${episode.id}`);
+          const data = await response.json();
+          if (data.success && data.logs) {
+            setTranscriptionLogs(prev => {
+              const newMap = new Map(prev);
+              newMap.set(episode.id, data.logs);
+              return newMap;
+            });
+          }
+        } catch (error) {
+          console.warn('獲取日誌失敗:', error);
+        }
+      }, 1000); // 每秒輪詢一次
       
-      // 2. 上傳到後端進行增強轉錄
-      console.log('步驟 2: 開始上傳並進行增強轉錄...');
-      setTranscriptProgress(prev => {
-        const newMap = new Map(prev);
-        newMap.set(episode.id, 30);
-        return newMap;
-      });
+      (window as any)[`logPolling_${episode.id}`] = logPollingInterval;
       
       const startTranscribe = Date.now();
-      const transcript = await uploadForEnhancedTranscription(audioBlob, episode);
+      
+      // 調用新的直接 URL 轉錄 API
+      const response = await fetch('/api/transcribe-from-url', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          audioUrl: episode.audioUrl,
+          title: episode.title,
+          episodeId: episode.id,
+          outputFormats: transcriptionSettings.outputFormats,
+          contentType: transcriptionSettings.contentType,
+          enableSpeakerDiarization: transcriptionSettings.enableSpeakerDiarization,
+          keywords: transcriptionSettings.keywords || '',
+          sourceLanguage: transcriptionSettings.sourceLanguage || 'auto'
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('直接 URL 轉錄 API 錯誤:', errorText);
+        
+        let errorData: any = {};
+        try {
+          errorData = JSON.parse(errorText);
+        } catch (parseError) {
+          errorData = { error: errorText };
+        }
+        
+        throw new Error(errorData.error || `轉錄失敗: ${response.status} ${response.statusText}`);
+      }
+      
+      const transcript = await response.json();
       const transcribeTime = Date.now() - startTranscribe;
       console.log(`增強轉錄完成，耗時: ${transcribeTime}ms`);
       
-      // 3. 更新狀態
+      // 更新進度
       setTranscriptProgress(prev => {
         const newMap = new Map(prev);
         newMap.set(episode.id, 100);
@@ -913,12 +952,12 @@ function App() {
       
       // 最後一次獲取日誌
       try {
-        const response = await fetch(`/api/transcribe-logs/${episode.id}`);
-        const data = await response.json();
-        if (data.success && data.logs) {
+        const logResponse = await fetch(`/api/transcribe-logs/${episode.id}`);
+        const logData = await logResponse.json();
+        if (logData.success && logData.logs) {
           setTranscriptionLogs(prev => {
             const newMap = new Map(prev);
-            newMap.set(episode.id, data.logs);
+            newMap.set(episode.id, logData.logs);
             return newMap;
           });
         }

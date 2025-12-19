@@ -308,6 +308,551 @@ app.get('/api/transcribe-logs/:episodeId', (req, res) => {
   });
 });
 
+// 新增：直接從 URL 轉錄 API（支援大檔案，不經過前端上傳）
+app.post('/api/transcribe-from-url', async (req, res) => {
+  const requestStartTime = Date.now();
+  console.log(`\n=== 直接從 URL 轉錄 API 請求開始 ===`);
+  console.log(`請求時間: ${new Date().toISOString()}`);
+  logMemoryUsage('請求開始');
+  
+  // 設置更長的 timeout（60 分鐘）
+  req.setTimeout(60 * 60 * 1000);
+  res.setTimeout(60 * 60 * 1000);
+  
+  const { 
+    audioUrl, 
+    title, 
+    episodeId,
+    outputFormats = ['txt'],
+    contentType = 'podcast',
+    enableSpeakerDiarization = false,
+    keywords = '',
+    sourceLanguage = 'auto'
+  } = req.body;
+  
+  if (!audioUrl) {
+    return res.status(400).json({ error: '缺少音檔 URL' });
+  }
+  
+  // 初始化日誌
+  const finalEpisodeId = episodeId || `url_${Date.now()}`;
+  transcriptionLogs.set(finalEpisodeId, []);
+  addTranscriptionLog(finalEpisodeId, 'info', '轉錄任務開始（直接從 URL）', '初始化');
+  addTranscriptionLog(finalEpisodeId, 'info', `音檔 URL: ${audioUrl}`, '初始化');
+  addTranscriptionLog(finalEpisodeId, 'info', `標題: ${title || 'Unknown'}`, '初始化');
+  
+  // 創建臨時目錄
+  const tempDir = path.join(__dirname, 'temp');
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
+  }
+  
+  const tempAudioPath = path.join(tempDir, `audio_${Date.now()}_${Math.random().toString(36).substring(7)}.mp3`);
+  
+  try {
+    // 1. 下載音檔到臨時檔案
+    console.log('步驟 1: 開始下載音檔...');
+    addTranscriptionLog(finalEpisodeId, 'info', '開始下載音檔...', '下載');
+    const downloadStartTime = Date.now();
+    
+    await new Promise((resolve, reject) => {
+      downloadAudio(audioUrl, async (error, audioBuffer) => {
+        if (error) {
+          console.error('音檔下載錯誤:', error);
+          addTranscriptionLog(finalEpisodeId, 'error', `音檔下載失敗: ${error.message}`, '錯誤');
+          reject(error);
+          return;
+        }
+        
+        const fileSizeMB = (audioBuffer.length / 1024 / 1024).toFixed(2);
+        const downloadDuration = ((Date.now() - downloadStartTime) / 1000).toFixed(2);
+        console.log(`音檔下載完成，大小: ${fileSizeMB}MB，耗時: ${downloadDuration} 秒`);
+        addTranscriptionLog(finalEpisodeId, 'success', `音檔下載完成，大小: ${fileSizeMB}MB，耗時: ${downloadDuration} 秒`, '下載');
+        
+        // 檢查下載的內容是否為有效音檔
+        if (audioBuffer.length < 1024) {
+          reject(new Error('下載的檔案太小，可能不是有效的音檔'));
+          return;
+        }
+        
+        // 寫入臨時檔案
+        try {
+          fs.writeFileSync(tempAudioPath, audioBuffer);
+          console.log(`音檔已保存到臨時檔案: ${tempAudioPath}`);
+          resolve(tempAudioPath);
+        } catch (writeError) {
+          reject(new Error(`寫入臨時檔案失敗: ${writeError.message}`));
+        }
+      });
+    });
+    
+    // 2. 創建檔案物件（模擬 formidable 的檔案物件）
+    const audioFile = {
+      filepath: tempAudioPath,
+      size: fs.statSync(tempAudioPath).size,
+      originalFilename: `${title || 'audio'}.mp3`,
+      mimetype: 'audio/mpeg'
+    };
+    
+    const fileSizeMB = (audioFile.size / 1024 / 1024).toFixed(2);
+    const estimatedDuration = Math.ceil((audioFile.size / 1024 / 1024) * 0.5);
+    console.log(`\n📋 轉錄任務資訊:`);
+    console.log(`  標題: ${title || 'Unknown'}`);
+    console.log(`  檔案大小: ${fileSizeMB}MB`);
+    console.log(`  預估時長: 約 ${estimatedDuration} 分鐘`);
+    console.log(`  輸出格式: ${outputFormats.join(', ')}`);
+    console.log(`  內容類型: ${contentType}`);
+    console.log(`  說話者分離: ${enableSpeakerDiarization ? '啟用' : '停用'}`);
+    logMemoryUsage('任務開始');
+    
+    addTranscriptionLog(finalEpisodeId, 'info', `檔案大小: ${fileSizeMB}MB，預估時長: 約 ${estimatedDuration} 分鐘`, '任務資訊');
+    addTranscriptionLog(finalEpisodeId, 'info', `輸出格式: ${outputFormats.join(', ')}, 內容類型: ${contentType}`, '任務資訊');
+    
+    // 3. 驗證和正規化音檔格式
+    try {
+      console.log('=== 音檔格式驗證開始 ===');
+      const normalizedFilePath = validateAndNormalizeAudioFile(audioFile.filepath);
+      audioFile.filepath = normalizedFilePath;
+      validateAudioFileContent(audioFile.filepath);
+      console.log(`✅ 音檔格式驗證通過: ${audioFile.filepath}`);
+    } catch (validationError) {
+      console.error('=== 音檔格式驗證失敗 ===');
+      console.error('驗證錯誤:', validationError);
+      
+      try {
+        fs.unlinkSync(tempAudioPath);
+      } catch (cleanupError) {
+        console.warn('清理無效檔案失敗:', cleanupError);
+      }
+      
+      return res.status(400).json({
+        error: `音檔格式驗證失敗: ${validationError.message}`,
+        suggestions: [
+          '請確保檔案是有效的音檔格式',
+          '支援格式: MP3, WAV, M4A, FLAC, OGG, WebM',
+          '檢查檔案是否完整下載',
+          '嘗試使用其他音檔轉換工具重新編碼'
+        ]
+      });
+    }
+    
+    // 4. 處理大檔案（壓縮/分割）
+    const OPENAI_LIMIT = 25 * 1024 * 1024;
+    let processedAudio;
+    
+    if (audioFile.size > OPENAI_LIMIT) {
+      const fileSizeMB = (audioFile.size / 1024 / 1024).toFixed(2);
+      console.log(`\n🔧 [階段 1/4] 音檔處理開始`);
+      console.log(`  音檔大小 ${fileSizeMB}MB 超過 25MB，啟動自動處理...`);
+      const processingStartTime = Date.now();
+      logMemoryUsage('音檔處理開始');
+      addTranscriptionLog(finalEpisodeId, 'info', `[階段 1/4] 音檔處理開始 - 檔案大小 ${fileSizeMB}MB 超過 25MB，啟動自動處理`, '音檔處理');
+      
+      try {
+        processedAudio = await processLargeAudio(audioFile, title || 'Unknown');
+        const processingDuration = ((Date.now() - processingStartTime) / 1000).toFixed(2);
+        console.log(`✅ [階段 1/4] 音檔處理完成，耗時: ${processingDuration} 秒`);
+        logMemoryUsage('音檔處理完成');
+        addTranscriptionLog(finalEpisodeId, 'success', `[階段 1/4] 音檔處理完成，耗時: ${processingDuration} 秒`, '音檔處理');
+        if (processedAudio.type === 'segments') {
+          addTranscriptionLog(finalEpisodeId, 'info', `音檔已分割為 ${processedAudio.totalSegments} 個片段`, '音檔處理');
+        }
+      } catch (ffmpegError) {
+        if (ffmpegError.message.includes("ffmpeg") || ffmpegError.message.includes("ENOENT")) {
+          console.error("FFmpeg 不可用:", ffmpegError.message);
+          return res.status(413).json({
+            error: "音檔大小超過限制，且伺服器音檔處理功能不可用",
+            message: "請手動壓縮音檔",
+            suggestions: [
+              "使用音訊編輯軟體壓縮至25MB以下",
+              "降低音質至128kbps或更低",
+              "分割成較短片段",
+              "轉換為MP3格式"
+            ],
+            currentSize: fileSizeMB + "MB",
+            maxSize: "25MB"
+          });
+        }
+        throw ffmpegError;
+      }
+    } else {
+      processedAudio = {
+        type: 'single',
+        file: audioFile.filepath,
+        size: audioFile.size
+      };
+    }
+    
+    // 5. 檢查 OpenAI API 金鑰
+    if (!process.env.OPENAI_API_KEY) {
+      console.error('OpenAI API 金鑰未設置');
+      return res.status(500).json({
+        error: 'OpenAI API 金鑰未設置'
+      });
+    }
+    
+    // 6. 開始轉錄（重用現有邏輯）
+    console.log(`\n🎤 [階段 2/4] 開始轉錄`);
+    console.log(`  OpenAI API 端點: ${openai.baseURL}`);
+    const transcriptionStartTime = Date.now();
+    logMemoryUsage('轉錄開始');
+    addTranscriptionLog(finalEpisodeId, 'info', `[階段 2/4] 開始轉錄 - OpenAI API 端點: ${openai.baseURL}`, '轉錄');
+    
+    let finalTranscription;
+    
+    // 確定使用的語言（用於生成提示詞，如果 auto 則使用 zh 作為預設）
+    const promptLanguage = sourceLanguage === 'auto' ? 'zh' : sourceLanguage;
+    
+    // 生成優化的提示詞
+    let optimizedPrompt = TranscriptionOptimizer.generateOptimizedPrompt(promptLanguage, contentType);
+    
+    // 如果有 keywords，將其合併到 prompt 中
+    if (keywords && keywords.trim()) {
+      optimizedPrompt = `${keywords.trim()}\n\n${optimizedPrompt}`;
+      if (optimizedPrompt.length > 400) {
+        const keywordsPart = keywords.trim();
+        const remainingLength = 400 - keywordsPart.length - 2;
+        if (remainingLength > 0) {
+          const basePrompt = TranscriptionOptimizer.generateOptimizedPrompt(promptLanguage, contentType);
+          optimizedPrompt = `${keywordsPart}\n\n${basePrompt.substring(0, remainingLength)}`;
+        } else {
+          optimizedPrompt = keywordsPart.substring(0, 400);
+        }
+        console.log('⚠️ 合併後的 prompt 超過 400 字元，已自動截斷');
+      }
+      console.log(`使用優化提示詞（含關鍵字）: ${optimizedPrompt.substring(0, 100)}...`);
+    } else {
+      console.log(`使用優化提示詞: ${optimizedPrompt}`);
+    }
+    
+    // 記錄語言設置
+    console.log(`語言設置: ${sourceLanguage === 'auto' ? '自動檢測' : sourceLanguage}`);
+    addTranscriptionLog(finalEpisodeId, 'info', `語言設置: ${sourceLanguage === 'auto' ? '自動檢測' : sourceLanguage}`, '初始化');
+    
+    if (processedAudio.type === 'single') {
+      // 單一檔案轉錄
+      console.log('  轉錄模式: 單一檔案');
+      const segmentStartTime = Date.now();
+      addTranscriptionLog(finalEpisodeId, 'info', '轉錄模式: 單一檔案', '轉錄');
+      
+      let transcription;
+      try {
+        console.log('  正在呼叫 OpenAI API...');
+        addTranscriptionLog(finalEpisodeId, 'info', '正在呼叫 OpenAI API...', '轉錄');
+        
+        const transcriptionParams = {
+          file: fs.createReadStream(processedAudio.file),
+          model: 'gpt-4o-transcribe',
+          response_format: 'verbose_json',
+          timestamp_granularities: ['word'],
+          prompt: optimizedPrompt
+        };
+        
+        if (sourceLanguage && sourceLanguage !== 'auto') {
+          transcriptionParams.language = sourceLanguage;
+          console.log(`  使用指定語言: ${sourceLanguage}`);
+        } else {
+          console.log('  使用自動語言檢測');
+        }
+        
+        transcription = await openai.audio.transcriptions.create(transcriptionParams);
+        const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
+        console.log(`  ✅ 使用 gpt-4o-transcribe 模型轉錄成功，耗時: ${segmentDuration} 秒`);
+        addTranscriptionLog(finalEpisodeId, 'success', `使用 gpt-4o-transcribe 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
+      } catch (modelError) {
+        console.warn(`  ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
+        console.log('  正在使用 whisper-1 模型...');
+        addTranscriptionLog(finalEpisodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1`, '轉錄');
+        
+        const fallbackParams = {
+          file: fs.createReadStream(processedAudio.file),
+          model: 'whisper-1',
+          response_format: 'verbose_json',
+          timestamp_granularities: ['word'],
+          prompt: optimizedPrompt
+        };
+        
+        if (sourceLanguage && sourceLanguage !== 'auto') {
+          fallbackParams.language = sourceLanguage;
+        }
+        
+        transcription = await openai.audio.transcriptions.create(fallbackParams);
+      }
+      
+      finalTranscription = transcription;
+      
+    } else {
+      // 多片段轉錄 - 使用並行處理
+      console.log(`  轉錄模式: 多片段（共 ${processedAudio.totalSegments} 個片段）`);
+      const totalSegments = processedAudio.files.length;
+      const CONCURRENT_LIMIT = 3;
+      const SEGMENT_DURATION = 300;
+      
+      console.log(`  🚀 啟用並行處理模式，同時處理 ${CONCURRENT_LIMIT} 個片段`);
+      addTranscriptionLog(finalEpisodeId, 'info', `啟用並行處理模式，同時處理 ${CONCURRENT_LIMIT} 個片段`, '轉錄');
+      
+      // 處理單個片段的函數（帶重試機制）
+      async function processSegmentWithRetry(segmentFile, segmentIndex, totalSegments) {
+        const segmentStartTime = Date.now();
+        console.log(`\n  📝 片段 ${segmentIndex}/${totalSegments}: ${path.basename(segmentFile)}`);
+        logMemoryUsage(`片段 ${segmentIndex} 開始`);
+        addTranscriptionLog(finalEpisodeId, 'info', `片段 ${segmentIndex}/${totalSegments}: ${path.basename(segmentFile)}`, '轉錄');
+        
+        let transcription;
+        let retryCount = 0;
+        const maxRetries = 3;
+        
+        while (retryCount < maxRetries) {
+          try {
+            console.log(`    正在呼叫 OpenAI API... (嘗試 ${retryCount + 1}/${maxRetries})`);
+            addTranscriptionLog(finalEpisodeId, 'info', `片段 ${segmentIndex} 正在呼叫 OpenAI API... (嘗試 ${retryCount + 1}/${maxRetries})`, '轉錄');
+            
+            const transcriptionParams = {
+              file: fs.createReadStream(segmentFile),
+              model: 'gpt-4o-transcribe',
+              response_format: 'verbose_json',
+              timestamp_granularities: ['word'],
+              prompt: optimizedPrompt
+            };
+            
+            if (sourceLanguage && sourceLanguage !== 'auto') {
+              transcriptionParams.language = sourceLanguage;
+            }
+            
+            transcription = await openai.audio.transcriptions.create(transcriptionParams);
+            break;
+          } catch (modelError) {
+            retryCount++;
+            if (retryCount >= maxRetries) {
+              console.warn(`    ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
+              console.log(`    正在使用 whisper-1 模型...`);
+              addTranscriptionLog(finalEpisodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1`, '轉錄');
+              
+              const fallbackParams = {
+                file: fs.createReadStream(segmentFile),
+                model: 'whisper-1',
+                response_format: 'verbose_json',
+                timestamp_granularities: ['word'],
+                prompt: optimizedPrompt
+              };
+              
+              if (sourceLanguage && sourceLanguage !== 'auto') {
+                fallbackParams.language = sourceLanguage;
+              }
+              
+              transcription = await openai.audio.transcriptions.create(fallbackParams);
+            } else {
+              const retryDelay = Math.min(500 * Math.pow(2, retryCount - 1), 2000);
+              console.warn(`    ⚠️ API 呼叫失敗，${retryDelay}ms 後重試... (${retryCount}/${maxRetries})`);
+              addTranscriptionLog(finalEpisodeId, 'warn', `API 呼叫失敗，${retryDelay}ms 後重試...`, '轉錄');
+              await new Promise(resolve => setTimeout(resolve, retryDelay));
+            }
+          }
+        }
+        
+        const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
+        console.log(`    ✅ 片段 ${segmentIndex} 轉錄完成，耗時: ${segmentDuration} 秒`);
+        logMemoryUsage(`片段 ${segmentIndex} 完成`);
+        addTranscriptionLog(finalEpisodeId, 'success', `片段 ${segmentIndex} 轉錄完成，耗時: ${segmentDuration} 秒`, '轉錄');
+        
+        return { index: segmentIndex - 1, transcription };
+      }
+      
+      // 並行處理所有片段
+      const results = [];
+      const activePromises = new Set();
+      
+      async function processWithConcurrencyLimit(segmentFile, segmentIndex, totalSegments) {
+        while (activePromises.size >= CONCURRENT_LIMIT) {
+          await Promise.race(Array.from(activePromises));
+        }
+        
+        const promise = processSegmentWithRetry(segmentFile, segmentIndex, totalSegments)
+          .then(result => {
+            results.push(result);
+            activePromises.delete(promise);
+            return result;
+          })
+          .catch(error => {
+            console.error(`片段 ${segmentIndex} 處理失敗:`, error);
+            addTranscriptionLog(finalEpisodeId, 'error', `片段 ${segmentIndex} 處理失敗: ${error.message}`, '錯誤');
+            activePromises.delete(promise);
+            return { index: segmentIndex - 1, error: error.message };
+          });
+        
+        activePromises.add(promise);
+        return promise;
+      }
+      
+      // 啟動所有片段的處理
+      const allPromises = [];
+      for (let i = 0; i < processedAudio.files.length; i++) {
+        allPromises.push(processWithConcurrencyLimit(processedAudio.files[i], i + 1, totalSegments));
+      }
+      
+      // 等待所有片段完成
+      await Promise.all(allPromises);
+      
+      // 按順序合併結果
+      results.sort((a, b) => a.index - b.index);
+      
+      let mergedResult = {
+        text: '',
+        duration: 0,
+        segments: [],
+        totalSegments: 0
+      };
+      
+      let cumulativeOffset = 0;
+      
+      for (const result of results) {
+        if (result.error) {
+          console.error(`⚠️ 片段 ${result.index + 1} 處理失敗，跳過: ${result.error}`);
+          cumulativeOffset += SEGMENT_DURATION;
+          continue;
+        }
+        
+        const segmentOffset = result.index * SEGMENT_DURATION;
+        
+        mergedResult = mergeTranscriptionIncrementalWithOffset(
+          mergedResult,
+          result.transcription,
+          result.index + 1,
+          totalSegments,
+          segmentOffset,
+          SEGMENT_DURATION
+        );
+        
+        cumulativeOffset += SEGMENT_DURATION;
+      }
+      
+      mergedResult.duration = cumulativeOffset;
+      finalTranscription = mergedResult;
+      console.log(`\n  ✅ 所有片段轉錄並合併完成，共 ${totalSegments} 個片段`);
+      addTranscriptionLog(finalEpisodeId, 'success', `所有片段轉錄並合併完成，共 ${totalSegments} 個片段`, '轉錄');
+    }
+    
+    const transcriptionDuration = ((Date.now() - transcriptionStartTime) / 1000 / 60).toFixed(2);
+    console.log(`✅ [階段 2/4] 轉錄完成，總耗時: ${transcriptionDuration} 分鐘`);
+    logMemoryUsage('轉錄完成');
+    addTranscriptionLog(finalEpisodeId, 'success', `[階段 2/4] 轉錄完成，總耗時: ${transcriptionDuration} 分鐘`, '轉錄');
+    
+    // 7. 錯字檢查與修正
+    console.log(`\n🔍 [階段 3/4] 開始錯字檢查與修正`);
+    const spellCheckStartTime = Date.now();
+    logMemoryUsage('錯字檢查開始');
+    addTranscriptionLog(finalEpisodeId, 'info', '[階段 3/4] 開始錯字檢查與修正', '錯字檢查');
+    let correctedTranscription = finalTranscription;
+    try {
+      correctedTranscription = await checkAndCorrectSpelling(finalTranscription, finalTranscription.language || 'zh', contentType);
+      const spellCheckDuration = ((Date.now() - spellCheckStartTime) / 1000).toFixed(2);
+      console.log(`✅ [階段 3/4] 錯字檢查完成，耗時: ${spellCheckDuration} 秒`);
+      logMemoryUsage('錯字檢查完成');
+      addTranscriptionLog(finalEpisodeId, 'success', `[階段 3/4] 錯字檢查完成，耗時: ${spellCheckDuration} 秒`, '錯字檢查');
+    } catch (spellCheckError) {
+      console.warn(`⚠️ [階段 3/4] 錯字檢查失敗，使用原始轉錄結果: ${spellCheckError.message}`);
+      logMemoryUsage('錯字檢查失敗');
+      addTranscriptionLog(finalEpisodeId, 'warn', `[階段 3/4] 錯字檢查失敗，使用原始轉錄結果: ${spellCheckError.message}`, '錯字檢查');
+    }
+    
+    // 8. 處理說話者分離
+    if (enableSpeakerDiarization && correctedTranscription.segments) {
+      console.log('開始處理說話者分離...');
+      correctedTranscription.segments = await SpeakerDiarization.simulateSpeakerDetection(correctedTranscription.segments);
+    }
+    
+    // 9. 生成多種輸出格式
+    console.log(`\n📄 [階段 4/4] 生成多種輸出格式`);
+    const formatStartTime = Date.now();
+    logMemoryUsage('格式生成開始');
+    const processedResult = TranscriptionProcessor.processTranscriptionResult(correctedTranscription, {
+      enableSpeakerDiarization,
+      outputFormats,
+      optimizeSegments: true,
+      contentType
+    });
+    
+    // 10. 清理臨時檔案
+    try {
+      fs.unlinkSync(tempAudioPath);
+      
+      if (processedAudio.type === 'single' && processedAudio.file !== tempAudioPath) {
+        fs.unlinkSync(processedAudio.file);
+      } else if (processedAudio.type === 'segments') {
+        processedAudio.files.forEach(file => {
+          try { fs.unlinkSync(file); } catch (e) {}
+        });
+        const segmentDir = path.dirname(processedAudio.files[0]);
+        try { fs.rmdirSync(segmentDir); } catch (e) {}
+        
+        const compressedFile = processedAudio.file;
+        if (compressedFile && fs.existsSync(compressedFile)) {
+          fs.unlinkSync(compressedFile);
+        }
+      }
+      
+      console.log('臨時檔案清理成功');
+    } catch (cleanupError) {
+      console.warn('清理臨時檔案失敗:', cleanupError);
+    }
+    
+    const formatDuration = ((Date.now() - formatStartTime) / 1000).toFixed(2);
+    console.log(`✅ [階段 4/4] 格式生成完成，耗時: ${formatDuration} 秒`);
+    logMemoryUsage('格式生成完成');
+    
+    const totalDuration = ((Date.now() - requestStartTime) / 1000 / 60).toFixed(2);
+    console.log(`\n🎉 轉錄任務完成: ${title || 'Unknown'}`);
+    console.log(`  總耗時: ${totalDuration} 分鐘`);
+    console.log(`  文字長度: ${processedResult.formats.txt?.length || 0} 字元`);
+    if (processedAudio.type === 'segments') {
+      console.log(`  處理片段數: ${processedAudio.totalSegments} 個`);
+    }
+    logMemoryUsage('任務完成');
+    console.log(`=== 直接從 URL 轉錄 API 請求結束 ===\n`);
+    
+    addTranscriptionLog(finalEpisodeId, 'success', `🎉 轉錄任務完成！總耗時: ${totalDuration} 分鐘，文字長度: ${processedResult.formats.txt?.length || 0} 字元`, '完成');
+    
+    // 清理日誌（5 分鐘後）
+    cleanupLogs(finalEpisodeId);
+    
+    // 回傳結果
+    res.json({
+      success: true,
+      episodeId: finalEpisodeId,
+      title: title || 'Unknown',
+      text: processedResult.formats.txt || '',
+      formats: processedResult.formats,
+      metadata: processedResult.metadata,
+      segments: correctedTranscription.segments || [],
+      url: `/api/transcribe/${finalEpisodeId}`
+    });
+    
+  } catch (error) {
+    console.error('轉錄錯誤:', error);
+    addTranscriptionLog(finalEpisodeId, 'error', `轉錄失敗: ${error.message}`, '錯誤');
+    
+    // 清理臨時檔案
+    try {
+      if (fs.existsSync(tempAudioPath)) {
+        fs.unlinkSync(tempAudioPath);
+      }
+    } catch (cleanupError) {
+      console.warn('清理臨時檔案失敗:', cleanupError);
+    }
+    
+    if (!res.headersSent) {
+      return res.status(500).json({
+        error: `轉錄失敗: ${error.message}`,
+        suggestions: [
+          '請檢查音檔 URL 是否有效',
+          '確認音檔格式是否支援',
+          '檢查網路連線是否穩定'
+        ]
+      });
+    }
+  }
+});
+
 // 增強版轉錄 API
 app.post('/api/transcribe', (req, res) => {
   const requestStartTime = Date.now();
