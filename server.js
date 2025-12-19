@@ -553,6 +553,12 @@ app.post('/api/transcribe-from-url', async (req, res) => {
         console.log('  正在呼叫 OpenAI API...');
         addTranscriptionLog(finalEpisodeId, 'info', '正在呼叫 OpenAI API...', '轉錄');
         
+        // 嘗試使用 gpt-4o-transcribe 模型
+        // 注意：如果此模型不可用，可能原因：
+        // 1. API 速率限制：gpt-4o-transcribe 有速率限制（第1層：500 RPM）
+        // 2. API 密鑰權限：需要確保 API 密鑰有訪問此模型的權限
+        // 3. 模型暫時不可用：OpenAI 可能暫時關閉此模型
+        // 4. 如果失敗，系統會自動回退到 whisper-1 模型
         const transcriptionParams = {
           file: fs.createReadStream(processedAudio.file),
           model: 'gpt-4o-transcribe',
@@ -574,14 +580,32 @@ app.post('/api/transcribe-from-url', async (req, res) => {
         addTranscriptionLog(finalEpisodeId, 'success', `使用 gpt-4o-transcribe 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
       } catch (modelError) {
         console.warn(`  ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
+        console.error(`  完整錯誤對象:`, JSON.stringify(modelError, Object.getOwnPropertyNames(modelError), 2));
         
         // 記錄詳細錯誤信息
+        let errorMessage = modelError.message;
         if (modelError.response) {
           const status = modelError.response.status;
           const statusText = modelError.response.statusText;
           const errorData = modelError.response.data || {};
-          console.error(`  API 響應錯誤: ${status} ${statusText}`, errorData);
-          addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${status} ${statusText} - ${errorData.error?.message || modelError.message}`, '轉錄');
+          const detailedError = errorData.error || {};
+          
+          console.error(`  API 響應錯誤: ${status} ${statusText}`);
+          console.error(`  錯誤詳情:`, JSON.stringify(errorData, null, 2));
+          
+          // 構建詳細錯誤訊息
+          errorMessage = `${status} ${statusText}`;
+          if (detailedError.message) {
+            errorMessage += ` - ${detailedError.message}`;
+          }
+          if (detailedError.type) {
+            errorMessage += ` (類型: ${detailedError.type})`;
+          }
+          if (detailedError.code) {
+            errorMessage += ` (代碼: ${detailedError.code})`;
+          }
+          
+          addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${errorMessage}`, '轉錄');
         } else if (modelError.code) {
           console.error(`  錯誤代碼: ${modelError.code}`);
           addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
@@ -660,14 +684,32 @@ app.post('/api/transcribe-from-url', async (req, res) => {
             
             // 記錄詳細錯誤信息
             console.error(`    ❌ API 調用錯誤 (嘗試 ${retryCount}/${maxRetries}):`, modelError.message);
+            console.error(`    完整錯誤對象:`, JSON.stringify(modelError, Object.getOwnPropertyNames(modelError), 2));
             
             // 記錄 API 響應錯誤詳情
+            let errorMessage = modelError.message;
             if (modelError.response) {
               const status = modelError.response.status;
               const statusText = modelError.response.statusText;
               const errorData = modelError.response.data || {};
-              console.error(`    API 響應錯誤: ${status} ${statusText}`, errorData);
-              addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${status} ${statusText} - ${errorData.error?.message || modelError.message}`, '轉錄');
+              const detailedError = errorData.error || {};
+              
+              console.error(`    API 響應錯誤: ${status} ${statusText}`);
+              console.error(`    錯誤詳情:`, JSON.stringify(errorData, null, 2));
+              
+              // 構建詳細錯誤訊息
+              errorMessage = `${status} ${statusText}`;
+              if (detailedError.message) {
+                errorMessage += ` - ${detailedError.message}`;
+              }
+              if (detailedError.type) {
+                errorMessage += ` (類型: ${detailedError.type})`;
+              }
+              if (detailedError.code) {
+                errorMessage += ` (代碼: ${detailedError.code})`;
+              }
+              
+              addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${errorMessage}`, '轉錄');
             } else if (modelError.code) {
               console.error(`    錯誤代碼: ${modelError.code}`);
               addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
@@ -1312,8 +1354,39 @@ app.post('/api/transcribe', (req, res) => {
           addTranscriptionLog(episodeId, 'success', `使用 gpt-4o-transcribe 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
         } catch (modelError) {
           console.warn(`  ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
+          console.error(`  完整錯誤對象:`, JSON.stringify(modelError, Object.getOwnPropertyNames(modelError), 2));
+          
+          // 記錄詳細錯誤信息
+          let errorMessage = modelError.message;
+          if (modelError.response) {
+            const status = modelError.response.status;
+            const statusText = modelError.response.statusText;
+            const errorData = modelError.response.data || {};
+            const detailedError = errorData.error || {};
+            
+            console.error(`  API 響應錯誤: ${status} ${statusText}`);
+            console.error(`  錯誤詳情:`, JSON.stringify(errorData, null, 2));
+            
+            // 構建詳細錯誤訊息
+            errorMessage = `${status} ${statusText}`;
+            if (detailedError.message) {
+              errorMessage += ` - ${detailedError.message}`;
+            }
+            if (detailedError.type) {
+              errorMessage += ` (類型: ${detailedError.type})`;
+            }
+            if (detailedError.code) {
+              errorMessage += ` (代碼: ${detailedError.code})`;
+            }
+            
+            addTranscriptionLog(episodeId, 'error', `API 錯誤: ${errorMessage}`, '轉錄');
+          } else if (modelError.code) {
+            console.error(`  錯誤代碼: ${modelError.code}`);
+            addTranscriptionLog(episodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
+          }
+          
           console.log('  正在使用 whisper-1 模型...');
-          addTranscriptionLog(episodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1`, '轉錄');
+          addTranscriptionLog(episodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1: ${errorMessage}`, '轉錄');
           
           // 構建轉錄參數（回退到 whisper-1）
           const fallbackParams = {
@@ -1378,11 +1451,42 @@ app.post('/api/transcribe', (req, res) => {
               break; // 成功，跳出重試循環
             } catch (modelError) {
               retryCount++;
-              if (retryCount >= maxRetries) {
-                // 最後一次嘗試使用 whisper-1
-                console.warn(`    ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
-                console.log(`    正在使用 whisper-1 模型...`);
-                addTranscriptionLog(episodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1`, '轉錄');
+            if (retryCount >= maxRetries) {
+              // 最後一次嘗試使用 whisper-1
+              console.warn(`    ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
+              console.error(`    完整錯誤對象:`, JSON.stringify(modelError, Object.getOwnPropertyNames(modelError), 2));
+              
+              // 記錄詳細錯誤信息
+              let errorMessage = modelError.message;
+              if (modelError.response) {
+                const status = modelError.response.status;
+                const statusText = modelError.response.statusText;
+                const errorData = modelError.response.data || {};
+                const detailedError = errorData.error || {};
+                
+                console.error(`    API 響應錯誤: ${status} ${statusText}`);
+                console.error(`    錯誤詳情:`, JSON.stringify(errorData, null, 2));
+                
+                // 構建詳細錯誤訊息
+                errorMessage = `${status} ${statusText}`;
+                if (detailedError.message) {
+                  errorMessage += ` - ${detailedError.message}`;
+                }
+                if (detailedError.type) {
+                  errorMessage += ` (類型: ${detailedError.type})`;
+                }
+                if (detailedError.code) {
+                  errorMessage += ` (代碼: ${detailedError.code})`;
+                }
+                
+                addTranscriptionLog(episodeId, 'error', `API 錯誤: ${errorMessage}`, '轉錄');
+              } else if (modelError.code) {
+                console.error(`    錯誤代碼: ${modelError.code}`);
+                addTranscriptionLog(episodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
+              }
+              
+              console.log(`    正在使用 whisper-1 模型...`);
+              addTranscriptionLog(episodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1: ${errorMessage}`, '轉錄');
                 
                 // 構建轉錄參數（回退到 whisper-1）
                 const fallbackParams = {
