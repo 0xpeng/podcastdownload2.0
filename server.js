@@ -333,7 +333,8 @@ app.post('/api/transcribe', (req, res) => {
   });
   
   const form = new formidable.IncomingForm({
-    maxFileSize: 30 * 1024 * 1024, // 30MB 上傳上限，稍高於 OpenAI 25MB 限制
+    maxFileSize: 32 * 1024 * 1024, // 32MB 上傳上限（增加緩衝空間，避免邊界情況）
+    maxTotalFileSize: 32 * 1024 * 1024, // 總檔案大小限制（避免邊界錯誤）
     keepExtensions: true,
     // 增強檔案名稱處理
     filename: (name, ext, part, form) => {
@@ -370,10 +371,31 @@ app.post('/api/transcribe', (req, res) => {
         httpCode: err.httpCode,
         stack: err.stack
       });
+      
+      // 處理檔案大小超過限制的錯誤
+      if (err.code === 1009 || err.httpCode === 413 || err.message.includes('maxTotalFileSize') || err.message.includes('maxFileSize')) {
+        const fileSizeMatch = err.message.match(/(\d+) bytes/);
+        const receivedSize = fileSizeMatch ? `${(parseInt(fileSizeMatch[1]) / 1024 / 1024).toFixed(2)}MB` : '未知';
+        const maxSizeMatch = err.message.match(/\((\d+) bytes\)/);
+        const maxSize = maxSizeMatch ? `${(parseInt(maxSizeMatch[1]) / 1024 / 1024).toFixed(2)}MB` : '32MB';
+        
+        return res.status(413).json({ 
+          error: '檔案大小超過限制',
+          currentSize: receivedSize,
+          maxSize: maxSize,
+          details: err.message,
+          suggestions: [
+            '檔案會自動壓縮和分割處理',
+            '如果持續失敗，請嘗試使用較小的音檔',
+            '建議使用 30MB 以下的音檔以獲得最佳體驗'
+          ]
+        });
+      }
+      
       return res.status(400).json({ 
         error: `表單解析失敗: ${err.message}`,
         details: err.code || 'UNKNOWN_ERROR',
-        suggestion: err.code === 'LIMIT_FILE_SIZE' ? '檔案大小超過 30MB 限制' : '請檢查檔案格式和大小'
+        suggestion: '請檢查檔案格式和大小'
       });
     }
     
