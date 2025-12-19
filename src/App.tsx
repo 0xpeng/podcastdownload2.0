@@ -483,6 +483,7 @@ interface TranscriptionSettings {
   contentType: string;
   enableSpeakerDiarization: boolean;
   keywords: string; // 新增：Whisper Prompt 關鍵字
+  sourceLanguage: string; // 新增：音檔語言 'auto' | 'zh' | 'en' | 'ja' | 'ko' | ...
 }
 
 // 新增：行銷內容接口
@@ -557,7 +558,8 @@ function App() {
     outputFormats: ['txt'],
     contentType: 'podcast',
     enableSpeakerDiarization: false,
-    keywords: '' // 新增：關鍵字欄位
+    keywords: '', // 新增：關鍵字欄位
+    sourceLanguage: 'auto' // 新增：語言設置，預設為自動檢測
   });
   const [showTranscriptionSettings, setShowTranscriptionSettings] = useState(false);
   
@@ -1159,6 +1161,8 @@ function App() {
     formData.append('enableSpeakerDiarization', transcriptionSettings.enableSpeakerDiarization.toString());
     // 新增：傳送 keywords
     formData.append('keywords', transcriptionSettings.keywords || '');
+    // 新增：傳送語言設置
+    formData.append('sourceLanguage', transcriptionSettings.sourceLanguage || 'auto');
 
     console.log('開始上傳音檔到增強轉錄服務...');
     console.log('轉錄設置:', transcriptionSettings);
@@ -1941,6 +1945,28 @@ function App() {
           {showTranscriptionSettings && (
             <div className="settings-panel">
               <div className="setting-group">
+                <label>🌐 音檔語言：</label>
+                <select
+                  className="content-type-select"
+                  value={transcriptionSettings.sourceLanguage}
+                  onChange={(e) => updateTranscriptionSettings('sourceLanguage', e.target.value)}
+                >
+                  <option value="auto">自動檢測（推薦）</option>
+                  <option value="zh">中文</option>
+                  <option value="en">英文</option>
+                  <option value="ja">日文</option>
+                  <option value="ko">韓文</option>
+                  <option value="es">西班牙文</option>
+                  <option value="fr">法文</option>
+                  <option value="de">德文</option>
+                  <option value="pt">葡萄牙文</option>
+                </select>
+                <div className="setting-description">
+                  自動檢測會讓系統自動識別音檔語言，通常最準確。如果知道確切語言，可以手動選擇以提高準確度。
+                </div>
+              </div>
+
+              <div className="setting-group">
                 <label>📄 輸出格式：</label>
                 <div className="format-options">
                   {['txt', 'srt', 'vtt', 'json'].map(format => (
@@ -2012,6 +2038,15 @@ function App() {
 
               <div className="settings-summary">
                 <strong>目前設置：</strong>
+                <span>語言: {transcriptionSettings.sourceLanguage === 'auto' ? '自動檢測' : 
+                  transcriptionSettings.sourceLanguage === 'zh' ? '中文' :
+                  transcriptionSettings.sourceLanguage === 'en' ? '英文' :
+                  transcriptionSettings.sourceLanguage === 'ja' ? '日文' :
+                  transcriptionSettings.sourceLanguage === 'ko' ? '韓文' :
+                  transcriptionSettings.sourceLanguage === 'es' ? '西班牙文' :
+                  transcriptionSettings.sourceLanguage === 'fr' ? '法文' :
+                  transcriptionSettings.sourceLanguage === 'de' ? '德文' :
+                  transcriptionSettings.sourceLanguage === 'pt' ? '葡萄牙文' : transcriptionSettings.sourceLanguage}</span>
                 <span>格式: {transcriptionSettings.outputFormats.join(', ').toUpperCase()}</span>
                 <span>類型: {
                   transcriptionSettings.contentType === 'podcast' ? '播客節目' :

@@ -370,6 +370,7 @@ app.post('/api/transcribe', (req, res) => {
     const audioFile = files.audio?.[0];
     const title = fields.title?.[0] || 'Unknown';
     const episodeId = fields.episodeId?.[0] || 'unknown';
+    const sourceLanguage = fields.sourceLanguage?.[0] || 'auto'; // 新增：獲取語言參數，預設為 auto
     const outputFormats = fields.outputFormats?.[0]?.split(',') || ['txt'];
     const contentType = fields.contentType?.[0] || 'podcast';
     const enableSpeakerDiarization = fields.enableSpeakerDiarization?.[0] === 'true';
@@ -522,8 +523,11 @@ app.post('/api/transcribe', (req, res) => {
     try {
       let finalTranscription;
       
+      // 確定使用的語言（用於生成提示詞，如果 auto 則使用 zh 作為預設）
+      const promptLanguage = sourceLanguage === 'auto' ? 'zh' : sourceLanguage;
+      
       // 生成優化的提示詞
-      let optimizedPrompt = TranscriptionOptimizer.generateOptimizedPrompt('zh', contentType);
+      let optimizedPrompt = TranscriptionOptimizer.generateOptimizedPrompt(promptLanguage, contentType);
       
       // 新增：如果有 keywords，將其合併到 prompt 中
       if (keywords && keywords.trim()) {
@@ -535,7 +539,7 @@ app.post('/api/transcribe', (req, res) => {
           const keywordsPart = keywords.trim();
           const remainingLength = 400 - keywordsPart.length - 2; // 減去換行符
           if (remainingLength > 0) {
-            const basePrompt = TranscriptionOptimizer.generateOptimizedPrompt('zh', contentType);
+            const basePrompt = TranscriptionOptimizer.generateOptimizedPrompt(promptLanguage, contentType);
             optimizedPrompt = `${keywordsPart}\n\n${basePrompt.substring(0, remainingLength)}`;
           } else {
             optimizedPrompt = keywordsPart.substring(0, 400);
@@ -547,6 +551,10 @@ app.post('/api/transcribe', (req, res) => {
         console.log(`使用優化提示詞: ${optimizedPrompt}`);
       }
       
+      // 記錄語言設置
+      console.log(`語言設置: ${sourceLanguage === 'auto' ? '自動檢測' : sourceLanguage}`);
+      addTranscriptionLog(episodeId, 'info', `語言設置: ${sourceLanguage === 'auto' ? '自動檢測' : sourceLanguage}`, '初始化');
+      
       if (processedAudio.type === 'single') {
         // 單一檔案轉錄
         console.log('  轉錄模式: 單一檔案');
@@ -557,14 +565,25 @@ app.post('/api/transcribe', (req, res) => {
         try {
           console.log('  正在呼叫 OpenAI API...');
           addTranscriptionLog(episodeId, 'info', '正在呼叫 OpenAI API...', '轉錄');
-          transcription = await openai.audio.transcriptions.create({
+          
+          // 構建轉錄參數
+          const transcriptionParams = {
             file: fs.createReadStream(processedAudio.file),
             model: 'gpt-4o-transcribe', // 嘗試使用新模型
-            language: 'zh',
             response_format: 'verbose_json',
             timestamp_granularities: ['word'],
             prompt: optimizedPrompt
-          });
+          };
+          
+          // 只有當不是 'auto' 時才傳遞 language 參數
+          if (sourceLanguage && sourceLanguage !== 'auto') {
+            transcriptionParams.language = sourceLanguage;
+            console.log(`  使用指定語言: ${sourceLanguage}`);
+          } else {
+            console.log('  使用自動語言檢測');
+          }
+          
+          transcription = await openai.audio.transcriptions.create(transcriptionParams);
           const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
           console.log(`  ✅ 使用 gpt-4o-transcribe 模型轉錄成功，耗時: ${segmentDuration} 秒`);
           addTranscriptionLog(episodeId, 'success', `使用 gpt-4o-transcribe 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
@@ -572,14 +591,22 @@ app.post('/api/transcribe', (req, res) => {
           console.warn(`  ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
           console.log('  正在使用 whisper-1 模型...');
           addTranscriptionLog(episodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1`, '轉錄');
-          transcription = await openai.audio.transcriptions.create({
+          
+          // 構建轉錄參數（回退到 whisper-1）
+          const fallbackParams = {
             file: fs.createReadStream(processedAudio.file),
             model: 'whisper-1', // 回退到原模型
-            language: 'zh',
             response_format: 'verbose_json',
             timestamp_granularities: ['word'],
             prompt: optimizedPrompt
-          });
+          };
+          
+          // 只有當不是 'auto' 時才傳遞 language 參數
+          if (sourceLanguage && sourceLanguage !== 'auto') {
+            fallbackParams.language = sourceLanguage;
+          }
+          
+          transcription = await openai.audio.transcriptions.create(fallbackParams);
         }
         
         finalTranscription = transcription;
@@ -614,14 +641,21 @@ app.post('/api/transcribe', (req, res) => {
               console.log(`    正在呼叫 OpenAI API... (嘗試 ${retryCount + 1}/${maxRetries})`);
               addTranscriptionLog(episodeId, 'info', `片段 ${i + 1} 正在呼叫 OpenAI API... (嘗試 ${retryCount + 1}/${maxRetries})`, '轉錄');
               
-              transcription = await openai.audio.transcriptions.create({
+              // 構建轉錄參數
+              const transcriptionParams = {
                 file: fs.createReadStream(segmentFile),
                 model: 'gpt-4o-transcribe', // 嘗試使用新模型
-                language: 'zh',
                 response_format: 'verbose_json',
                 timestamp_granularities: ['word'],
                 prompt: optimizedPrompt
-              });
+              };
+              
+              // 只有當不是 'auto' 時才傳遞 language 參數
+              if (sourceLanguage && sourceLanguage !== 'auto') {
+                transcriptionParams.language = sourceLanguage;
+              }
+              
+              transcription = await openai.audio.transcriptions.create(transcriptionParams);
               break; // 成功，跳出重試循環
             } catch (modelError) {
               retryCount++;
@@ -630,14 +664,22 @@ app.post('/api/transcribe', (req, res) => {
                 console.warn(`    ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
                 console.log(`    正在使用 whisper-1 模型...`);
                 addTranscriptionLog(episodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1`, '轉錄');
-                transcription = await openai.audio.transcriptions.create({
+                
+                // 構建轉錄參數（回退到 whisper-1）
+                const fallbackParams = {
                   file: fs.createReadStream(segmentFile),
                   model: 'whisper-1', // 回退到原模型
-                  language: 'zh',
                   response_format: 'verbose_json',
                   timestamp_granularities: ['word'],
                   prompt: optimizedPrompt
-                });
+                };
+                
+                // 只有當不是 'auto' 時才傳遞 language 參數
+                if (sourceLanguage && sourceLanguage !== 'auto') {
+                  fallbackParams.language = sourceLanguage;
+                }
+                
+                transcription = await openai.audio.transcriptions.create(fallbackParams);
               } else {
                 // 等待後重試
                 console.warn(`    ⚠️ API 呼叫失敗，${2} 秒後重試... (${retryCount}/${maxRetries})`);
