@@ -1246,13 +1246,16 @@ function downloadAudio(url, callback, maxRedirects = 5) {
     const request = protocol.get(currentUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'audio/mpeg, audio/*, */*',
+        'Accept': 'audio/mpeg, audio/mp3, audio/mp4, audio/*, */*',
         'Accept-Encoding': 'identity',
-        'Connection': 'keep-alive'
+        'Connection': 'keep-alive',
+        'Range': undefined // 明確不設置 Range，確保完整下載
       },
       timeout: 120000 // 增加到 2 分鐘
     }, (response) => {
       console.log(`響應狀態: ${response.statusCode}`);
+      console.log(`Content-Type: ${response.headers['content-type'] || '未設置'}`);
+      console.log(`Content-Length: ${response.headers['content-length'] || '未知'}`);
       
       // 處理重定向
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
