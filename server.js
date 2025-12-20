@@ -548,94 +548,29 @@ app.post('/api/transcribe-from-url', async (req, res) => {
       const segmentStartTime = Date.now();
       addTranscriptionLog(finalEpisodeId, 'info', '轉錄模式: 單一檔案', '轉錄');
       
-      let transcription;
-      try {
-        console.log('  正在呼叫 OpenAI API...');
-        addTranscriptionLog(finalEpisodeId, 'info', '正在呼叫 OpenAI API...', '轉錄');
-        
-        // 嘗試使用 gpt-4o-transcribe 模型
-        // 注意：如果此模型不可用，可能原因：
-        // 1. API 速率限制：gpt-4o-transcribe 有速率限制（第1層：500 RPM）
-        // 2. API 密鑰權限：需要確保 API 密鑰有訪問此模型的權限
-        // 3. 模型暫時不可用：OpenAI 可能暫時關閉此模型
-        // 4. 如果失敗，系統會自動回退到 whisper-1 模型
-        const transcriptionParams = {
-          file: fs.createReadStream(processedAudio.file),
-          model: 'gpt-4o-transcribe',
-          response_format: 'verbose_json',
-          timestamp_granularities: ['word'],
-          prompt: optimizedPrompt
-        };
-        
-        if (sourceLanguage && sourceLanguage !== 'auto') {
-          transcriptionParams.language = sourceLanguage;
-          console.log(`  使用指定語言: ${sourceLanguage}`);
-        } else {
-          console.log('  使用自動語言檢測');
-        }
-        
-        transcription = await openai.audio.transcriptions.create(transcriptionParams);
-        const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
-        console.log(`  ✅ 使用 gpt-4o-transcribe 模型轉錄成功，耗時: ${segmentDuration} 秒`);
-        addTranscriptionLog(finalEpisodeId, 'success', `使用 gpt-4o-transcribe 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
-      } catch (modelError) {
-        console.warn(`  ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
-        console.error(`  完整錯誤對象:`, JSON.stringify(modelError, Object.getOwnPropertyNames(modelError), 2));
-        
-        // 記錄詳細錯誤信息
-        let errorMessage = modelError.message;
-        if (modelError.response) {
-          const status = modelError.response.status;
-          const statusText = modelError.response.statusText;
-          const errorData = modelError.response.data || {};
-          const detailedError = errorData.error || {};
-          
-          console.error(`  API 響應錯誤: ${status} ${statusText}`);
-          console.error(`  錯誤詳情:`, JSON.stringify(errorData, null, 2));
-          
-          // 構建詳細錯誤訊息
-          errorMessage = `${status} ${statusText}`;
-          if (detailedError.message) {
-            errorMessage += ` - ${detailedError.message}`;
-          }
-          if (detailedError.type) {
-            errorMessage += ` (類型: ${detailedError.type})`;
-          }
-          if (detailedError.code) {
-            errorMessage += ` (代碼: ${detailedError.code})`;
-          }
-          
-          addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${errorMessage}`, '轉錄');
-        } else if (modelError.code) {
-          console.error(`  錯誤代碼: ${modelError.code}`);
-          addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
-        }
-        
-        console.log('  正在使用 whisper-1 模型...');
-        addTranscriptionLog(finalEpisodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1`, '轉錄');
-        
-        try {
-          const fallbackParams = {
-            file: fs.createReadStream(processedAudio.file),
-            model: 'whisper-1',
-            response_format: 'verbose_json',
-            timestamp_granularities: ['word'],
-            prompt: optimizedPrompt
-          };
-          
-          if (sourceLanguage && sourceLanguage !== 'auto') {
-            fallbackParams.language = sourceLanguage;
-          }
-          
-          transcription = await openai.audio.transcriptions.create(fallbackParams);
-          console.log(`  ✅ 使用 whisper-1 模型轉錄成功`);
-          addTranscriptionLog(finalEpisodeId, 'success', `使用 whisper-1 模型轉錄成功`, '轉錄');
-        } catch (fallbackError) {
-          console.error(`  ❌ whisper-1 回退也失敗:`, fallbackError.message);
-          addTranscriptionLog(finalEpisodeId, 'error', `whisper-1 回退也失敗: ${fallbackError.message}`, '錯誤');
-          throw fallbackError;
-        }
+      // 使用 whisper-1 模型進行轉錄
+      console.log('  正在呼叫 OpenAI API...');
+      addTranscriptionLog(finalEpisodeId, 'info', '正在呼叫 OpenAI API (whisper-1)...', '轉錄');
+      
+      const transcriptionParams = {
+        file: fs.createReadStream(processedAudio.file),
+        model: 'whisper-1',
+        response_format: 'verbose_json',
+        timestamp_granularities: ['word'],
+        prompt: optimizedPrompt
+      };
+      
+      if (sourceLanguage && sourceLanguage !== 'auto') {
+        transcriptionParams.language = sourceLanguage;
+        console.log(`  使用指定語言: ${sourceLanguage}`);
+      } else {
+        console.log('  使用自動語言檢測');
       }
+      
+      const transcription = await openai.audio.transcriptions.create(transcriptionParams);
+      const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
+      console.log(`  ✅ 使用 whisper-1 模型轉錄成功，耗時: ${segmentDuration} 秒`);
+      addTranscriptionLog(finalEpisodeId, 'success', `使用 whisper-1 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
       
       finalTranscription = transcription;
       
@@ -667,7 +602,7 @@ app.post('/api/transcribe-from-url', async (req, res) => {
             
             const transcriptionParams = {
               file: fs.createReadStream(segmentFile),
-              model: 'gpt-4o-transcribe',
+              model: 'whisper-1',
               response_format: 'verbose_json',
               timestamp_granularities: ['word'],
               prompt: optimizedPrompt
@@ -684,32 +619,14 @@ app.post('/api/transcribe-from-url', async (req, res) => {
             
             // 記錄詳細錯誤信息
             console.error(`    ❌ API 調用錯誤 (嘗試 ${retryCount}/${maxRetries}):`, modelError.message);
-            console.error(`    完整錯誤對象:`, JSON.stringify(modelError, Object.getOwnPropertyNames(modelError), 2));
             
             // 記錄 API 響應錯誤詳情
-            let errorMessage = modelError.message;
             if (modelError.response) {
               const status = modelError.response.status;
               const statusText = modelError.response.statusText;
               const errorData = modelError.response.data || {};
-              const detailedError = errorData.error || {};
-              
-              console.error(`    API 響應錯誤: ${status} ${statusText}`);
-              console.error(`    錯誤詳情:`, JSON.stringify(errorData, null, 2));
-              
-              // 構建詳細錯誤訊息
-              errorMessage = `${status} ${statusText}`;
-              if (detailedError.message) {
-                errorMessage += ` - ${detailedError.message}`;
-              }
-              if (detailedError.type) {
-                errorMessage += ` (類型: ${detailedError.type})`;
-              }
-              if (detailedError.code) {
-                errorMessage += ` (代碼: ${detailedError.code})`;
-              }
-              
-              addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${errorMessage}`, '轉錄');
+              console.error(`    API 響應錯誤: ${status} ${statusText}`, errorData);
+              addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${status} ${statusText} - ${errorData.error?.message || modelError.message}`, '轉錄');
             } else if (modelError.code) {
               console.error(`    錯誤代碼: ${modelError.code}`);
               addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
@@ -718,31 +635,9 @@ app.post('/api/transcribe-from-url', async (req, res) => {
             }
             
             if (retryCount >= maxRetries) {
-              console.warn(`    ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
-              console.log(`    正在使用 whisper-1 模型...`);
-              addTranscriptionLog(finalEpisodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1`, '轉錄');
-              
-              try {
-                const fallbackParams = {
-                  file: fs.createReadStream(segmentFile),
-                  model: 'whisper-1',
-                  response_format: 'verbose_json',
-                  timestamp_granularities: ['word'],
-                  prompt: optimizedPrompt
-                };
-                
-                if (sourceLanguage && sourceLanguage !== 'auto') {
-                  fallbackParams.language = sourceLanguage;
-                }
-                
-                transcription = await openai.audio.transcriptions.create(fallbackParams);
-                console.log(`    ✅ 使用 whisper-1 模型轉錄成功`);
-                addTranscriptionLog(finalEpisodeId, 'success', `使用 whisper-1 模型轉錄成功`, '轉錄');
-              } catch (fallbackError) {
-                console.error(`    ❌ whisper-1 回退也失敗:`, fallbackError.message);
-                addTranscriptionLog(finalEpisodeId, 'error', `whisper-1 回退也失敗: ${fallbackError.message}`, '錯誤');
-                throw fallbackError;
-              }
+              console.error(`    ❌ 轉錄失敗，已重試 ${maxRetries} 次`);
+              addTranscriptionLog(finalEpisodeId, 'error', `轉錄失敗，已重試 ${maxRetries} 次: ${modelError.message}`, '錯誤');
+              throw modelError;
             } else {
               const retryDelay = Math.min(500 * Math.pow(2, retryCount - 1), 2000);
               console.warn(`    ⚠️ API 呼叫失敗，${retryDelay}ms 後重試... (${retryCount}/${maxRetries})`);
@@ -1325,85 +1220,31 @@ app.post('/api/transcribe', (req, res) => {
         console.log('  轉錄模式: 單一檔案');
         const segmentStartTime = Date.now();
         addTranscriptionLog(episodeId, 'info', '轉錄模式: 單一檔案', '轉錄');
-        // 嘗試使用 gpt-4o-transcribe，如果失敗則回退到 whisper-1
-        let transcription;
-        try {
-          console.log('  正在呼叫 OpenAI API...');
-          addTranscriptionLog(episodeId, 'info', '正在呼叫 OpenAI API...', '轉錄');
-          
-          // 構建轉錄參數
-          const transcriptionParams = {
+        // 使用 whisper-1 模型進行轉錄
+        console.log('  正在呼叫 OpenAI API...');
+        addTranscriptionLog(episodeId, 'info', '正在呼叫 OpenAI API (whisper-1)...', '轉錄');
+        
+        // 構建轉錄參數
+        const transcriptionParams = {
           file: fs.createReadStream(processedAudio.file),
-            model: 'gpt-4o-transcribe', // 嘗試使用新模型
+          model: 'whisper-1',
           response_format: 'verbose_json',
           timestamp_granularities: ['word'],
           prompt: optimizedPrompt
-          };
-          
-          // 只有當不是 'auto' 時才傳遞 language 參數
-          if (sourceLanguage && sourceLanguage !== 'auto') {
-            transcriptionParams.language = sourceLanguage;
-            console.log(`  使用指定語言: ${sourceLanguage}`);
-          } else {
-            console.log('  使用自動語言檢測');
-          }
-          
-          transcription = await openai.audio.transcriptions.create(transcriptionParams);
-          const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
-          console.log(`  ✅ 使用 gpt-4o-transcribe 模型轉錄成功，耗時: ${segmentDuration} 秒`);
-          addTranscriptionLog(episodeId, 'success', `使用 gpt-4o-transcribe 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
-        } catch (modelError) {
-          console.warn(`  ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
-          console.error(`  完整錯誤對象:`, JSON.stringify(modelError, Object.getOwnPropertyNames(modelError), 2));
-          
-          // 記錄詳細錯誤信息
-          let errorMessage = modelError.message;
-          if (modelError.response) {
-            const status = modelError.response.status;
-            const statusText = modelError.response.statusText;
-            const errorData = modelError.response.data || {};
-            const detailedError = errorData.error || {};
-            
-            console.error(`  API 響應錯誤: ${status} ${statusText}`);
-            console.error(`  錯誤詳情:`, JSON.stringify(errorData, null, 2));
-            
-            // 構建詳細錯誤訊息
-            errorMessage = `${status} ${statusText}`;
-            if (detailedError.message) {
-              errorMessage += ` - ${detailedError.message}`;
-            }
-            if (detailedError.type) {
-              errorMessage += ` (類型: ${detailedError.type})`;
-            }
-            if (detailedError.code) {
-              errorMessage += ` (代碼: ${detailedError.code})`;
-            }
-            
-            addTranscriptionLog(episodeId, 'error', `API 錯誤: ${errorMessage}`, '轉錄');
-          } else if (modelError.code) {
-            console.error(`  錯誤代碼: ${modelError.code}`);
-            addTranscriptionLog(episodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
-          }
-          
-          console.log('  正在使用 whisper-1 模型...');
-          addTranscriptionLog(episodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1: ${errorMessage}`, '轉錄');
-          
-          // 構建轉錄參數（回退到 whisper-1）
-          const fallbackParams = {
-            file: fs.createReadStream(processedAudio.file),
-            model: 'whisper-1', // 回退到原模型
-            response_format: 'verbose_json',
-            timestamp_granularities: ['word'],
-            prompt: optimizedPrompt
-          };
-          
-          // 只有當不是 'auto' 時才傳遞 language 參數
-          if (sourceLanguage && sourceLanguage !== 'auto') {
-            fallbackParams.language = sourceLanguage;
-          }
-          
-          transcription = await openai.audio.transcriptions.create(fallbackParams);
+        };
+        
+        // 只有當不是 'auto' 時才傳遞 language 參數
+        if (sourceLanguage && sourceLanguage !== 'auto') {
+          transcriptionParams.language = sourceLanguage;
+          console.log(`  使用指定語言: ${sourceLanguage}`);
+        } else {
+          console.log('  使用自動語言檢測');
         }
+        
+        const transcription = await openai.audio.transcriptions.create(transcriptionParams);
+        const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
+        console.log(`  ✅ 使用 whisper-1 模型轉錄成功，耗時: ${segmentDuration} 秒`);
+        addTranscriptionLog(episodeId, 'success', `使用 whisper-1 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
         
         finalTranscription = transcription;
         
@@ -1435,11 +1276,11 @@ app.post('/api/transcribe', (req, res) => {
               
               // 構建轉錄參數
               const transcriptionParams = {
-            file: fs.createReadStream(segmentFile),
-                model: 'gpt-4o-transcribe', // 嘗試使用新模型
-            response_format: 'verbose_json',
-            timestamp_granularities: ['word'],
-            prompt: optimizedPrompt
+                file: fs.createReadStream(segmentFile),
+                model: 'whisper-1',
+                response_format: 'verbose_json',
+                timestamp_granularities: ['word'],
+                prompt: optimizedPrompt
               };
               
               // 只有當不是 'auto' 時才傳遞 language 參數
@@ -1451,63 +1292,33 @@ app.post('/api/transcribe', (req, res) => {
               break; // 成功，跳出重試循環
             } catch (modelError) {
               retryCount++;
-            if (retryCount >= maxRetries) {
-              // 最後一次嘗試使用 whisper-1
-              console.warn(`    ⚠️ gpt-4o-transcribe 不可用，回退到 whisper-1: ${modelError.message}`);
-              console.error(`    完整錯誤對象:`, JSON.stringify(modelError, Object.getOwnPropertyNames(modelError), 2));
               
               // 記錄詳細錯誤信息
-              let errorMessage = modelError.message;
+              console.error(`    ❌ API 調用錯誤 (嘗試 ${retryCount}/${maxRetries}):`, modelError.message);
+              
+              // 記錄 API 響應錯誤詳情
               if (modelError.response) {
                 const status = modelError.response.status;
                 const statusText = modelError.response.statusText;
                 const errorData = modelError.response.data || {};
-                const detailedError = errorData.error || {};
-                
-                console.error(`    API 響應錯誤: ${status} ${statusText}`);
-                console.error(`    錯誤詳情:`, JSON.stringify(errorData, null, 2));
-                
-                // 構建詳細錯誤訊息
-                errorMessage = `${status} ${statusText}`;
-                if (detailedError.message) {
-                  errorMessage += ` - ${detailedError.message}`;
-                }
-                if (detailedError.type) {
-                  errorMessage += ` (類型: ${detailedError.type})`;
-                }
-                if (detailedError.code) {
-                  errorMessage += ` (代碼: ${detailedError.code})`;
-                }
-                
-                addTranscriptionLog(episodeId, 'error', `API 錯誤: ${errorMessage}`, '轉錄');
+                console.error(`    API 響應錯誤: ${status} ${statusText}`, errorData);
+                addTranscriptionLog(episodeId, 'error', `API 錯誤: ${status} ${statusText} - ${errorData.error?.message || modelError.message}`, '轉錄');
               } else if (modelError.code) {
                 console.error(`    錯誤代碼: ${modelError.code}`);
                 addTranscriptionLog(episodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
+              } else {
+                addTranscriptionLog(episodeId, 'error', `API 錯誤: ${modelError.message}`, '轉錄');
               }
               
-              console.log(`    正在使用 whisper-1 模型...`);
-              addTranscriptionLog(episodeId, 'warn', `gpt-4o-transcribe 不可用，回退到 whisper-1: ${errorMessage}`, '轉錄');
-                
-                // 構建轉錄參數（回退到 whisper-1）
-                const fallbackParams = {
-                  file: fs.createReadStream(segmentFile),
-                  model: 'whisper-1', // 回退到原模型
-                  response_format: 'verbose_json',
-                  timestamp_granularities: ['word'],
-                  prompt: optimizedPrompt
-                };
-                
-                // 只有當不是 'auto' 時才傳遞 language 參數
-                if (sourceLanguage && sourceLanguage !== 'auto') {
-                  fallbackParams.language = sourceLanguage;
-                }
-                
-                transcription = await openai.audio.transcriptions.create(fallbackParams);
+              if (retryCount >= maxRetries) {
+                console.error(`    ❌ 轉錄失敗，已重試 ${maxRetries} 次`);
+                addTranscriptionLog(episodeId, 'error', `轉錄失敗，已重試 ${maxRetries} 次: ${modelError.message}`, '錯誤');
+                throw modelError;
               } else {
                 // 指數退避重試：500ms, 1000ms, 2000ms
                 const retryDelay = Math.min(500 * Math.pow(2, retryCount - 1), 2000);
                 console.warn(`    ⚠️ API 呼叫失敗，${retryDelay}ms 後重試... (${retryCount}/${maxRetries})`);
-                addTranscriptionLog(episodeId, 'warn', `API 呼叫失敗，${retryDelay}ms 後重試...`, '轉錄');
+                addTranscriptionLog(episodeId, 'warn', `API 呼叫失敗，${retryDelay}ms 後重試... (${retryCount}/${maxRetries})`, '轉錄');
                 await new Promise(resolve => setTimeout(resolve, retryDelay));
               }
             }
