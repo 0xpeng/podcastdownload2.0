@@ -475,6 +475,10 @@ interface Episode {
   }>;
   // 新增：行銷內容生成結果
   generatedContent?: GeneratedContent;
+  // 新增：投資分析報告
+  investmentAnalysis?: string; // Markdown 格式的報告
+  // 新增：大眾日報版本
+  publicReport?: string; // Markdown 格式的報告
 }
 
 // 新增：轉錄設置接口
@@ -575,6 +579,10 @@ function App() {
   const [userInteracted, setUserInteracted] = useState(false);
   // 新增：行銷內容生成狀態
   const [generatingContent, setGeneratingContent] = useState<Set<string>>(new Set());
+  // 新增：投資分析報告生成狀態
+  const [generatingAnalysis, setGeneratingAnalysis] = useState<Set<string>>(new Set());
+  // 新增：大眾日報版本生成狀態
+  const [generatingPublicReport, setGeneratingPublicReport] = useState<Set<string>>(new Set());
   
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -1103,6 +1111,132 @@ function App() {
       alert(`行銷內容生成錯誤：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setGeneratingContent(prev => {
+        const next = new Set(prev);
+        next.delete(episode.id);
+        return next;
+      });
+    }
+  };
+
+  // 新增：根據逐字稿生成投資分析報告
+  const handleGenerateInvestmentAnalysis = async (episode: Episode) => {
+    if (!episode.transcriptText || !episode.transcriptText.trim()) {
+      alert('請先為此集數完成逐字稿轉錄，再生成投資分析報告。');
+      return;
+    }
+
+    setGeneratingAnalysis(prev => {
+      const next = new Set(prev);
+      next.add(episode.id);
+      return next;
+    });
+
+    try {
+      console.log(`開始為集數生成投資分析報告: ${episode.title}`);
+
+      const response = await fetch('/api/generate-analysis', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          episodeId: episode.id,
+          title: episode.title,
+          transcriptText: episode.transcriptText,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        const message = data?.error || `HTTP ${response.status}: ${response.statusText}`;
+        console.error('投資分析報告生成失敗:', message);
+        alert(`投資分析報告生成失敗：${message}`);
+        return;
+      }
+
+      const analysisText: string = data.analysis;
+
+      setEpisodes(prev =>
+        prev.map(ep =>
+          ep.id === episode.id
+            ? {
+                ...ep,
+                investmentAnalysis: analysisText,
+              }
+            : ep
+        )
+      );
+
+      alert(`已為「${episode.title}」生成投資分析報告！`);
+    } catch (error) {
+      console.error('投資分析報告生成錯誤:', error);
+      alert(`投資分析報告生成錯誤：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setGeneratingAnalysis(prev => {
+        const next = new Set(prev);
+        next.delete(episode.id);
+        return next;
+      });
+    }
+  };
+
+  // 新增：根據逐字稿生成大眾日報版本
+  const handleGeneratePublicReport = async (episode: Episode) => {
+    if (!episode.transcriptText || !episode.transcriptText.trim()) {
+      alert('請先為此集數完成逐字稿轉錄，再生成大眾日報版本。');
+      return;
+    }
+
+    setGeneratingPublicReport(prev => {
+      const next = new Set(prev);
+      next.add(episode.id);
+      return next;
+    });
+
+    try {
+      console.log(`開始為集數生成大眾日報版本: ${episode.title}`);
+
+      const response = await fetch('/api/generate-public-report', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          episodeId: episode.id,
+          title: episode.title,
+          transcriptText: episode.transcriptText,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        const message = data?.error || `HTTP ${response.status}: ${response.statusText}`;
+        console.error('大眾日報版本生成失敗:', message);
+        alert(`大眾日報版本生成失敗：${message}`);
+        return;
+      }
+
+      const reportText: string = data.report;
+
+      setEpisodes(prev =>
+        prev.map(ep =>
+          ep.id === episode.id
+            ? {
+                ...ep,
+                publicReport: reportText,
+              }
+            : ep
+        )
+      );
+
+      alert(`已為「${episode.title}」生成大眾日報版本！`);
+    } catch (error) {
+      console.error('大眾日報版本生成錯誤:', error);
+      alert(`大眾日報版本生成錯誤：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setGeneratingPublicReport(prev => {
         const next = new Set(prev);
         next.delete(episode.id);
         return next;
@@ -2367,6 +2501,28 @@ function App() {
                               {generatingContent.has(episode.id) ? '✨ 生成中...' : '✨ 行銷內容'}
                             </button>
                           )}
+                          {/* 新增：投資分析報告生成按鈕 */}
+                          {episode.transcriptStatus === 'completed' && (
+                            <button
+                              onClick={() => handleGenerateInvestmentAnalysis(episode)}
+                              disabled={generatingAnalysis.has(episode.id)}
+                              className="action-button analysis-action-button"
+                              title="根據逐字稿生成華爾街日報等級的投資分析報告"
+                            >
+                              {generatingAnalysis.has(episode.id) ? '📊 分析中...' : '📊 投資分析'}
+                            </button>
+                          )}
+                          {/* 新增：大眾日報版本生成按鈕 */}
+                          {episode.transcriptStatus === 'completed' && (
+                            <button
+                              onClick={() => handleGeneratePublicReport(episode)}
+                              disabled={generatingPublicReport.has(episode.id)}
+                              className="action-button public-report-action-button"
+                              title="根據逐字稿生成大眾日報版本（風趣幽默、好讀易懂）"
+                            >
+                              {generatingPublicReport.has(episode.id) ? '📰 生成中...' : '📰 大眾日報'}
+                            </button>
+                          )}
                         </div>
                         {/* 新增：行銷內容顯示區塊 */}
                         {episode.generatedContent && (
@@ -2428,6 +2584,86 @@ function App() {
                                 )}
                               </div>
                             )}
+                          </div>
+                        )}
+                        {/* 新增：投資分析報告顯示區塊 */}
+                        {episode.investmentAnalysis && (
+                          <div className="investment-analysis-panel">
+                            <div className="analysis-header">
+                              <strong>📊 投資分析報告（華爾街日報等級）</strong>
+                              <button
+                                onClick={() => {
+                                  const blob = new Blob([episode.investmentAnalysis || ''], { type: 'text/markdown' });
+                                  const url = URL.createObjectURL(blob);
+                                  const a = document.createElement('a');
+                                  a.href = url;
+                                  a.download = `${episode.title || 'investment-analysis'}-分析報告.md`;
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  document.body.removeChild(a);
+                                  URL.revokeObjectURL(url);
+                                }}
+                                className="download-analysis-button"
+                                title="下載分析報告（Markdown 格式）"
+                              >
+                                💾 下載報告
+                              </button>
+                            </div>
+                            <div className="analysis-content">
+                              <pre style={{ 
+                                whiteSpace: 'pre-wrap', 
+                                wordWrap: 'break-word',
+                                fontFamily: 'inherit',
+                                fontSize: 'inherit',
+                                lineHeight: 'inherit',
+                                margin: 0,
+                                padding: 0,
+                                background: 'transparent',
+                                border: 'none'
+                              }}>
+                                {episode.investmentAnalysis}
+                              </pre>
+                            </div>
+                          </div>
+                        )}
+                        {/* 新增：大眾日報版本顯示區塊 */}
+                        {episode.publicReport && (
+                          <div className="public-report-panel">
+                            <div className="report-header">
+                              <strong>📰 大眾日報版本（好讀易懂）</strong>
+                              <button
+                                onClick={() => {
+                                  const blob = new Blob([episode.publicReport || ''], { type: 'text/markdown' });
+                                  const url = URL.createObjectURL(blob);
+                                  const a = document.createElement('a');
+                                  a.href = url;
+                                  a.download = `${episode.title || 'public-report'}-大眾日報.md`;
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  document.body.removeChild(a);
+                                  URL.revokeObjectURL(url);
+                                }}
+                                className="download-report-button"
+                                title="下載大眾日報版本（Markdown 格式）"
+                              >
+                                💾 下載報告
+                              </button>
+                            </div>
+                            <div className="report-content">
+                              <pre style={{ 
+                                whiteSpace: 'pre-wrap', 
+                                wordWrap: 'break-word',
+                                fontFamily: 'inherit',
+                                fontSize: 'inherit',
+                                lineHeight: 'inherit',
+                                margin: 0,
+                                padding: 0,
+                                background: 'transparent',
+                                border: 'none'
+                              }}>
+                                {episode.publicReport}
+                              </pre>
+                            </div>
                           </div>
                         )}
                       </td>

@@ -1748,6 +1748,261 @@ ${transcriptText}
   }
 });
 
+// 新增：從逐字稿生成投資分析報告 API
+app.post('/api/generate-analysis', async (req, res) => {
+  console.log('投資分析報告生成 API 請求');
+
+  if (!process.env.OPENAI_API_KEY || !openai) {
+    return res.status(500).json({
+      error: 'OpenAI API 金鑰未設置，無法生成投資分析報告'
+    });
+  }
+
+  const { episodeId, title, transcriptText } = req.body || {};
+
+  if (!transcriptText || typeof transcriptText !== 'string' || transcriptText.trim().length < 20) {
+    return res.status(400).json({
+      error: '缺少足夠的逐字稿內容，無法生成投資分析報告'
+    });
+  }
+
+  try {
+    console.log(`開始為集數生成投資分析報告: ${title || episodeId || 'Unknown'}`);
+    console.log(`逐字稿長度: ${transcriptText.length} 字元`);
+
+    // 估算 token 數（保守估算：中文字符 * 2）
+    const estimatedTokens = transcriptText.length * 2;
+    console.log(`估算 token 數: ${estimatedTokens}`);
+    
+    if (estimatedTokens > 100000) {
+      console.warn(`⚠️ 逐字稿較長（估算 ${estimatedTokens} tokens），但仍嘗試一次性處理`);
+    }
+
+    const systemPrompt = `# Role
+你是一位華爾街頂級的科技投資分析師，專門服務避險基金經理人。
+你的任務是閱讀一份 Podcast 逐字稿，並從中萃取高價值的市場情報 (Alpha)。
+
+# Goal
+請忽略閒聊、廣告和口語贅字，專注於挖掘與「美股、AI 供應鏈、總體經濟」相關的洞察。
+請輸出這份報告給基金經理人看。`;
+
+    const userPrompt = `# Input Data
+${transcriptText}
+
+# Output Format (請嚴格遵守此 Markdown 格式)
+
+## 1. 市場情緒儀表板 (Sentiment Dashboard)
+* **整體情緒：** (看多 Bullish / 看空 Bearish / 中立 Neutral) - 請用一句話解釋原因。
+* **提及關鍵公司：**
+    * **NVIDIA (NVDA):** (正面/負面/中立) - (簡短理由)
+    * **TSMC (TSM):** (正面/負面/中立) - (簡短理由)
+    * (列出其他提到的公司...)
+
+## 2. 核心投資洞察 (Key Alpha)
+*(請列出 3-5 個最具含金量的論點。每個論點必須包含「邏輯推演」)*
+* **論點一：** [標題，例如：Blackwell 晶片延遲其實是利多？]
+    * **分析：** 講者認為市場過度反應了延遲問題，實際上需求積壓反而延長了獲利週期...
+    * **證據：** 來自逐字稿前段 (約 10% 處)。
+
+## 3. 被忽略的風險與細節 (Hidden Gems)
+*(有沒有什麼細節是普通散戶會忽略，但講者特別提到的？)*
+* [例如：電力供應可能在 2025 年成為 AI 發展瓶頸]
+
+## 4. 行動建議 (Actionable Advice)
+*(基於講者的觀點，投資人現在應該做什麼？)*
+* [例如：逢低買入軟體基礎設施股，避開硬體代工]
+
+---
+
+請確保：
+1. 所有分析都基於逐字稿的實際內容，不要自行編造
+2. 如果逐字稿中沒有提到特定公司或主題，請明確標註「未提及」
+3. 邏輯推演要清晰，證據要具體（可引用逐字稿的大致位置）
+4. 語氣專業、客觀，符合華爾街分析師的風格`;
+
+    // 嘗試使用 GPT-5.2（最佳推理能力，400K 上下文），如果失敗則嘗試 GPT-5 mini，最後回退到 gpt-4o
+    let completion;
+    const modelsToTry = ['gpt-5.2', 'gpt-5-mini', 'gpt-4o', 'gpt-4-turbo'];
+    let lastError = null;
+    
+    for (const model of modelsToTry) {
+      try {
+        console.log(`嘗試使用模型: ${model}`);
+        completion = await openai.chat.completions.create({
+          model: model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.3, // 較低溫度，確保分析更客觀準確
+        });
+        console.log(`✅ 使用 ${model} 模型生成投資分析報告成功`);
+        break;
+      } catch (modelError) {
+        console.warn(`⚠️ ${model} 不可用，嘗試下一個模型:`, modelError.message);
+        lastError = modelError;
+        continue;
+      }
+    }
+    
+    if (!completion) {
+      throw lastError || new Error('所有模型都不可用');
+    }
+
+    const analysisText = completion.choices?.[0]?.message?.content || '';
+
+    if (!analysisText || analysisText.trim().length === 0) {
+      throw new Error('GPT 返回的分析報告為空');
+    }
+
+    console.log(`✅ 投資分析報告生成成功，長度: ${analysisText.length} 字元`);
+
+    res.json({
+      success: true,
+      episodeId,
+      title,
+      analysis: analysisText, // Markdown 格式的報告
+      metadata: {
+        transcriptLength: transcriptText.length,
+        estimatedTokens: estimatedTokens,
+        model: completion.model,
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('投資分析報告生成失敗:', error);
+    res.status(500).json({
+      error: `投資分析報告生成失敗: ${error.message || String(error)}`
+    });
+  }
+});
+
+// 新增：從逐字稿生成大眾日報版本 API
+app.post('/api/generate-public-report', async (req, res) => {
+  console.log('大眾日報版本生成 API 請求');
+
+  if (!process.env.OPENAI_API_KEY || !openai) {
+    return res.status(500).json({
+      error: 'OpenAI API 金鑰未設置，無法生成大眾日報版本'
+    });
+  }
+
+  const { episodeId, title, transcriptText } = req.body || {};
+
+  if (!transcriptText || typeof transcriptText !== 'string' || transcriptText.trim().length < 20) {
+    return res.status(400).json({
+      error: '缺少足夠的逐字稿內容，無法生成大眾日報版本'
+    });
+  }
+
+  try {
+    console.log(`開始為集數生成大眾日報版本: ${title || episodeId || 'Unknown'}`);
+    console.log(`逐字稿長度: ${transcriptText.length} 字元`);
+
+    // 估算 token 數（保守估算：中文字符 * 2）
+    const estimatedTokens = transcriptText.length * 2;
+    console.log(`估算 token 數: ${estimatedTokens}`);
+    
+    if (estimatedTokens > 100000) {
+      console.warn(`⚠️ 逐字稿較長（估算 ${estimatedTokens} tokens），但仍嘗試一次性處理`);
+    }
+
+    const PROMPT_PUBLIC = `# Role
+你是一位風趣幽默的科技專欄作家（類似 Morning Brew 或 The Verge 風格）。
+你的讀者是一般大眾、上班族和入門投資人，他們想了解 AI 趨勢，但不想看枯燥的報告。
+
+# Goal
+閱讀 Podcast 逐字稿，用「最簡單的大白話」告訴大家最近發生了什麼大事。
+**解釋專有名詞，強調對「個人生活、工作與錢包」的影響。**
+
+# Output Format (Markdown)
+
+## 1. 懶人包：這集在聊什麼？
+(用輕鬆的口語，像是跟朋友聊天一樣介紹這集重點)
+
+## 2. 關於你的錢包 (投資風向)
+* **大公司動態：** (微軟、NVIDIA 最近怎麼了？簡單說是看漲還是看跌？)
+* **投資關鍵字：** (本集提到的熱門概念，例如「AI 泡沫」，用白話文解釋是什麼意思)
+
+## 3. 未來生活預告 (Future Life)
+*(AI 會怎麼改變我們的生活？)*
+* **工作會被取代嗎？** (講者怎麼看未來的就業市場？)
+* **新酷科技：** (有什麼新產品或新功能要出來了嗎？)
+
+## 4. 漲知識 (Buzzword Buster)
+*(挑選 2-3 個這集出現的難詞，用比喻的方式解釋)*
+* **例如：Token Factory (代幣工廠)** -> 想像成是 AI 時代的發電廠...
+
+請用「繁體中文」撰寫，語氣親切、好讀，多用比喻。`;
+
+    const userPrompt = `# Input Data
+${transcriptText}
+
+${PROMPT_PUBLIC}
+
+請確保：
+1. 所有內容都基於逐字稿的實際內容，不要自行編造
+2. 如果逐字稿中沒有提到特定公司或主題，請明確標註「未提及」
+3. 用最簡單的大白話解釋，避免專業術語
+4. 語氣親切、風趣，像是跟朋友聊天一樣
+5. 多用比喻和例子，讓一般大眾也能理解`;
+
+    // 嘗試使用 GPT-5.2（最佳推理能力，400K 上下文），如果失敗則嘗試 GPT-5 mini，最後回退到 gpt-4o
+    let completion;
+    const modelsToTry = ['gpt-5.2', 'gpt-5-mini', 'gpt-4o', 'gpt-4-turbo'];
+    let lastError = null;
+    
+    for (const model of modelsToTry) {
+      try {
+        console.log(`嘗試使用模型: ${model}`);
+        completion = await openai.chat.completions.create({
+          model: model,
+          messages: [
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.7, // 較高溫度，確保語氣風趣幽默
+        });
+        console.log(`✅ 使用 ${model} 模型生成大眾日報版本成功`);
+        break;
+      } catch (modelError) {
+        console.warn(`⚠️ ${model} 不可用，嘗試下一個模型:`, modelError.message);
+        lastError = modelError;
+        continue;
+      }
+    }
+    
+    if (!completion) {
+      throw lastError || new Error('所有模型都不可用');
+    }
+
+    const reportText = completion.choices?.[0]?.message?.content || '';
+
+    if (!reportText || reportText.trim().length === 0) {
+      throw new Error('GPT 返回的大眾日報版本為空');
+    }
+
+    console.log(`✅ 大眾日報版本生成成功，長度: ${reportText.length} 字元`);
+
+    res.json({
+      success: true,
+      episodeId,
+      title,
+      report: reportText, // Markdown 格式的報告
+      metadata: {
+        transcriptLength: transcriptText.length,
+        estimatedTokens: estimatedTokens,
+        model: completion.model,
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('大眾日報版本生成失敗:', error);
+    res.status(500).json({
+      error: `大眾日報版本生成失敗: ${error.message || String(error)}`
+    });
+  }
+});
+
 // 新增：錯字檢查與修正函數
 async function checkAndCorrectSpelling(transcription, language = 'zh', contentType = 'podcast') {
   if (!transcription || !transcription.text) {
