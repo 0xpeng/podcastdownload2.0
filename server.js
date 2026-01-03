@@ -296,6 +296,58 @@ function logMemoryUsage(stage, silent = false) {
   return memoryInfo;
 }
 
+// 新增：檢測 API 額度/用量錯誤的輔助函數
+function detectQuotaError(error) {
+  const result = {
+    isQuotaError: false,
+    errorType: null,
+    userMessage: '',
+    shouldRetry: true
+  };
+
+  // 檢查 HTTP 響應狀態碼
+  if (error.response) {
+    const status = error.response.status;
+    const errorData = error.response.data || {};
+
+    if (status === 429) {
+      result.isQuotaError = true;
+      result.errorType = 'rate_limit';
+      result.userMessage = 'API 請求頻率過高（Rate Limit），請稍後再試或檢查用量限制';
+      result.shouldRetry = true; // Rate Limit 可以重試
+    } else if (status === 402) {
+      result.isQuotaError = true;
+      result.errorType = 'payment_required';
+      result.userMessage = 'API 餘額不足或付款方式有問題，請檢查 OpenAI 帳戶餘額和付款方式';
+      result.shouldRetry = false; // 餘額問題不應該重試
+    } else if (status === 401) {
+      result.isQuotaError = true;
+      result.errorType = 'authentication';
+      result.userMessage = 'API 金鑰無效或已過期，請檢查 OPENAI_API_KEY 設定';
+      result.shouldRetry = false; // 認證問題不應該重試
+    } else if (status === 403) {
+      result.isQuotaError = true;
+      result.errorType = 'forbidden';
+      result.userMessage = 'API 存取被拒絕，可能是額度用盡或權限問題，請檢查 OpenAI 帳戶';
+      result.shouldRetry = false;
+    }
+  } else if (error.cause) {
+    // 檢查連接錯誤（可能是額度問題導致的連接重置）
+    const errno = error.cause.errno;
+    const errorMessage = error.message || '';
+
+    // ECONNRESET 可能是額度問題，但也可能是網路問題
+    if (errno === 'ECONNRESET' && errorMessage.includes('Connection error')) {
+      result.isQuotaError = true; // 標記為可能的額度問題
+      result.errorType = 'connection_reset';
+      result.userMessage = '連接被重置，可能是 API 額度用盡或網路問題。請檢查 OpenAI 帳戶的 API 餘額和用量限制';
+      result.shouldRetry = true; // 連接錯誤可以重試
+    }
+  }
+
+  return result;
+}
+
 // 新增：查詢轉錄日誌 API
 app.get('/api/transcribe-logs/:episodeId', (req, res) => {
   const { episodeId } = req.params;
@@ -543,34 +595,102 @@ app.post('/api/transcribe-from-url', async (req, res) => {
     addTranscriptionLog(finalEpisodeId, 'info', `語言設置: ${sourceLanguage === 'auto' ? '自動檢測（將根據實際內容生成對應語言字幕）' : sourceLanguage}`, '初始化');
     
     if (processedAudio.type === 'single') {
-      // 單一檔案轉錄
+      // 單一檔案轉錄（帶重試機制）
       console.log('  轉錄模式: 單一檔案');
       const segmentStartTime = Date.now();
       addTranscriptionLog(finalEpisodeId, 'info', '轉錄模式: 單一檔案', '轉錄');
       
-      // 使用 whisper-1 模型進行轉錄
-      console.log('  正在呼叫 OpenAI API...');
-      addTranscriptionLog(finalEpisodeId, 'info', '正在呼叫 OpenAI API (whisper-1)...', '轉錄');
+      let transcription;
+      let retryCount = 0;
+      const maxRetries = 5; // 增加重試次數
       
-      const transcriptionParams = {
-        file: fs.createReadStream(processedAudio.file),
-        model: 'whisper-1',
-        response_format: 'verbose_json',
-        timestamp_granularities: ['word'],
-        prompt: optimizedPrompt
-      };
-      
-      if (sourceLanguage && sourceLanguage !== 'auto') {
-        transcriptionParams.language = sourceLanguage;
-        console.log(`  使用指定語言: ${sourceLanguage}`);
-      } else {
-        console.log('  使用自動語言檢測');
+      while (retryCount < maxRetries) {
+        try {
+          console.log(`  正在呼叫 OpenAI API... (嘗試 ${retryCount + 1}/${maxRetries})`);
+          addTranscriptionLog(finalEpisodeId, 'info', `正在呼叫 OpenAI API (whisper-1)... (嘗試 ${retryCount + 1}/${maxRetries})`, '轉錄');
+          
+          // 每次重試都重新創建文件流
+          const transcriptionParams = {
+            file: fs.createReadStream(processedAudio.file),
+            model: 'whisper-1',
+            response_format: 'verbose_json',
+            timestamp_granularities: ['word'],
+            prompt: optimizedPrompt
+          };
+          
+          if (sourceLanguage && sourceLanguage !== 'auto') {
+            transcriptionParams.language = sourceLanguage;
+            console.log(`  使用指定語言: ${sourceLanguage}`);
+          } else {
+            console.log('  使用自動語言檢測');
+          }
+          
+          transcription = await openai.audio.transcriptions.create(transcriptionParams);
+          
+          const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
+          console.log(`  ✅ 使用 whisper-1 模型轉錄成功，耗時: ${segmentDuration} 秒`);
+          addTranscriptionLog(finalEpisodeId, 'success', `使用 whisper-1 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
+          break; // 成功，跳出重試循環
+          
+        } catch (modelError) {
+          retryCount++;
+          
+          // 檢測 API 額度錯誤
+          const quotaCheck = detectQuotaError(modelError);
+          
+          // 記錄詳細錯誤信息
+          console.error(`  ❌ API 調用錯誤 (嘗試 ${retryCount}/${maxRetries}):`, modelError.message);
+          
+          if (quotaCheck.isQuotaError) {
+            console.error(`  ⚠️ 檢測到 API 額度/用量問題: ${quotaCheck.errorType}`);
+            console.error(`  💡 提示: ${quotaCheck.userMessage}`);
+            addTranscriptionLog(finalEpisodeId, 'error', `⚠️ ${quotaCheck.userMessage}`, '錯誤');
+            addTranscriptionLog(finalEpisodeId, 'info', `💡 請檢查 OpenAI 帳戶: https://platform.openai.com/usage`, '建議');
+            
+            // 如果是餘額或認證問題，不重試，直接拋出
+            if (!quotaCheck.shouldRetry) {
+              const enhancedError = new Error(quotaCheck.userMessage);
+              enhancedError.isQuotaError = true;
+              enhancedError.errorType = quotaCheck.errorType;
+              enhancedError.originalError = modelError;
+              throw enhancedError;
+            }
+          } else {
+            // 記錄其他錯誤詳情
+            if (modelError.response) {
+              const status = modelError.response.status;
+              const statusText = modelError.response.statusText;
+              const errorData = modelError.response.data || {};
+              console.error(`  API 響應錯誤: ${status} ${statusText}`, errorData);
+              addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${status} ${statusText} - ${errorData.error?.message || modelError.message}`, '轉錄');
+            } else if (modelError.cause?.errno) {
+              console.error(`  連接錯誤: ${modelError.cause.errno} (${modelError.cause.type})`);
+              addTranscriptionLog(finalEpisodeId, 'error', `連接錯誤: ${modelError.cause.errno} - ${modelError.message}`, '轉錄');
+            } else {
+              addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${modelError.message}`, '轉錄');
+            }
+          }
+          
+          if (retryCount >= maxRetries) {
+            console.error(`  ❌ 轉錄失敗，已重試 ${maxRetries} 次`);
+            addTranscriptionLog(finalEpisodeId, 'error', `轉錄失敗，已重試 ${maxRetries} 次: ${modelError.message}`, '錯誤');
+            
+            // 如果是最後一次重試且是連接錯誤，給出額度檢查建議
+            if (modelError.cause?.errno === 'ECONNRESET') {
+              addTranscriptionLog(finalEpisodeId, 'info', `💡 建議：請檢查 OpenAI 帳戶的 API 餘額和用量限制`, '建議');
+            }
+            
+            throw modelError;
+          } else {
+            // 對於連接錯誤，使用更長的重試延遲
+            const baseDelay = (modelError.cause?.errno === 'ECONNRESET' || quotaCheck.isQuotaError) ? 5000 : 2000;
+            const retryDelay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 30000);
+            console.warn(`  ⚠️ ${retryDelay / 1000} 秒後重試... (${retryCount}/${maxRetries})`);
+            addTranscriptionLog(finalEpisodeId, 'warn', `${retryDelay / 1000} 秒後重試... (${retryCount}/${maxRetries})`, '轉錄');
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+          }
+        }
       }
-      
-      const transcription = await openai.audio.transcriptions.create(transcriptionParams);
-      const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
-      console.log(`  ✅ 使用 whisper-1 模型轉錄成功，耗時: ${segmentDuration} 秒`);
-      addTranscriptionLog(finalEpisodeId, 'success', `使用 whisper-1 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
       
       finalTranscription = transcription;
       
@@ -617,31 +737,61 @@ app.post('/api/transcribe-from-url', async (req, res) => {
           } catch (modelError) {
             retryCount++;
             
+            // 檢測 API 額度錯誤
+            const quotaCheck = detectQuotaError(modelError);
+            
             // 記錄詳細錯誤信息
             console.error(`    ❌ API 調用錯誤 (嘗試 ${retryCount}/${maxRetries}):`, modelError.message);
             
-            // 記錄 API 響應錯誤詳情
-            if (modelError.response) {
-              const status = modelError.response.status;
-              const statusText = modelError.response.statusText;
-              const errorData = modelError.response.data || {};
-              console.error(`    API 響應錯誤: ${status} ${statusText}`, errorData);
-              addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${status} ${statusText} - ${errorData.error?.message || modelError.message}`, '轉錄');
-            } else if (modelError.code) {
-              console.error(`    錯誤代碼: ${modelError.code}`);
-              addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
+            if (quotaCheck.isQuotaError) {
+              console.error(`    ⚠️ 檢測到 API 額度/用量問題: ${quotaCheck.errorType}`);
+              console.error(`    💡 提示: ${quotaCheck.userMessage}`);
+              addTranscriptionLog(finalEpisodeId, 'error', `⚠️ ${quotaCheck.userMessage}`, '錯誤');
+              addTranscriptionLog(finalEpisodeId, 'info', `💡 請檢查 OpenAI 帳戶: https://platform.openai.com/usage`, '建議');
+              
+              // 如果是餘額或認證問題，不重試，直接拋出
+              if (!quotaCheck.shouldRetry) {
+                const enhancedError = new Error(quotaCheck.userMessage);
+                enhancedError.isQuotaError = true;
+                enhancedError.errorType = quotaCheck.errorType;
+                enhancedError.originalError = modelError;
+                throw enhancedError;
+              }
             } else {
-              addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${modelError.message}`, '轉錄');
+              // 記錄其他錯誤詳情
+              if (modelError.response) {
+                const status = modelError.response.status;
+                const statusText = modelError.response.statusText;
+                const errorData = modelError.response.data || {};
+                console.error(`    API 響應錯誤: ${status} ${statusText}`, errorData);
+                addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${status} ${statusText} - ${errorData.error?.message || modelError.message}`, '轉錄');
+              } else if (modelError.cause?.errno) {
+                console.error(`    連接錯誤: ${modelError.cause.errno} (${modelError.cause.type})`);
+                addTranscriptionLog(finalEpisodeId, 'error', `連接錯誤: ${modelError.cause.errno} - ${modelError.message}`, '轉錄');
+              } else if (modelError.code) {
+                console.error(`    錯誤代碼: ${modelError.code}`);
+                addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
+              } else {
+                addTranscriptionLog(finalEpisodeId, 'error', `API 錯誤: ${modelError.message}`, '轉錄');
+              }
             }
             
             if (retryCount >= maxRetries) {
               console.error(`    ❌ 轉錄失敗，已重試 ${maxRetries} 次`);
               addTranscriptionLog(finalEpisodeId, 'error', `轉錄失敗，已重試 ${maxRetries} 次: ${modelError.message}`, '錯誤');
+              
+              // 如果是最後一次重試且是連接錯誤，給出額度檢查建議
+              if (modelError.cause?.errno === 'ECONNRESET') {
+                addTranscriptionLog(finalEpisodeId, 'info', `💡 建議：請檢查 OpenAI 帳戶的 API 餘額和用量限制`, '建議');
+              }
+              
               throw modelError;
             } else {
-              const retryDelay = Math.min(500 * Math.pow(2, retryCount - 1), 2000);
-              console.warn(`    ⚠️ API 呼叫失敗，${retryDelay}ms 後重試... (${retryCount}/${maxRetries})`);
-              addTranscriptionLog(finalEpisodeId, 'warn', `API 呼叫失敗，${retryDelay}ms 後重試... (${retryCount}/${maxRetries})`, '轉錄');
+              // 對於連接錯誤或額度問題，使用更長的重試延遲
+              const baseDelay = (modelError.cause?.errno === 'ECONNRESET' || quotaCheck.isQuotaError) ? 5000 : 2000;
+              const retryDelay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 30000);
+              console.warn(`    ⚠️ ${retryDelay / 1000} 秒後重試... (${retryCount}/${maxRetries})`);
+              addTranscriptionLog(finalEpisodeId, 'warn', `${retryDelay / 1000} 秒後重試... (${retryCount}/${maxRetries})`, '轉錄');
               await new Promise(resolve => setTimeout(resolve, retryDelay));
             }
           }
@@ -1216,35 +1366,103 @@ app.post('/api/transcribe', (req, res) => {
       addTranscriptionLog(episodeId, 'info', `語言設置: ${sourceLanguage === 'auto' ? '自動檢測' : sourceLanguage}`, '初始化');
       
       if (processedAudio.type === 'single') {
-        // 單一檔案轉錄
+        // 單一檔案轉錄（帶重試機制）
         console.log('  轉錄模式: 單一檔案');
         const segmentStartTime = Date.now();
         addTranscriptionLog(episodeId, 'info', '轉錄模式: 單一檔案', '轉錄');
-        // 使用 whisper-1 模型進行轉錄
-        console.log('  正在呼叫 OpenAI API...');
-        addTranscriptionLog(episodeId, 'info', '正在呼叫 OpenAI API (whisper-1)...', '轉錄');
         
-        // 構建轉錄參數
-        const transcriptionParams = {
-          file: fs.createReadStream(processedAudio.file),
-          model: 'whisper-1',
-          response_format: 'verbose_json',
-          timestamp_granularities: ['word'],
-          prompt: optimizedPrompt
-        };
+        let transcription;
+        let retryCount = 0;
+        const maxRetries = 5; // 增加重試次數
         
-        // 只有當不是 'auto' 時才傳遞 language 參數
-        if (sourceLanguage && sourceLanguage !== 'auto') {
-          transcriptionParams.language = sourceLanguage;
-          console.log(`  使用指定語言: ${sourceLanguage}`);
-        } else {
-          console.log('  使用自動語言檢測');
+        while (retryCount < maxRetries) {
+          try {
+            console.log(`  正在呼叫 OpenAI API... (嘗試 ${retryCount + 1}/${maxRetries})`);
+            addTranscriptionLog(episodeId, 'info', `正在呼叫 OpenAI API (whisper-1)... (嘗試 ${retryCount + 1}/${maxRetries})`, '轉錄');
+            
+            // 每次重試都重新創建文件流
+            const transcriptionParams = {
+              file: fs.createReadStream(processedAudio.file),
+              model: 'whisper-1',
+              response_format: 'verbose_json',
+              timestamp_granularities: ['word'],
+              prompt: optimizedPrompt
+            };
+            
+            // 只有當不是 'auto' 時才傳遞 language 參數
+            if (sourceLanguage && sourceLanguage !== 'auto') {
+              transcriptionParams.language = sourceLanguage;
+              console.log(`  使用指定語言: ${sourceLanguage}`);
+            } else {
+              console.log('  使用自動語言檢測');
+            }
+            
+            transcription = await openai.audio.transcriptions.create(transcriptionParams);
+            
+            const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
+            console.log(`  ✅ 使用 whisper-1 模型轉錄成功，耗時: ${segmentDuration} 秒`);
+            addTranscriptionLog(episodeId, 'success', `使用 whisper-1 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
+            break; // 成功，跳出重試循環
+            
+          } catch (modelError) {
+            retryCount++;
+            
+            // 檢測 API 額度錯誤
+            const quotaCheck = detectQuotaError(modelError);
+            
+            // 記錄詳細錯誤信息
+            console.error(`  ❌ API 調用錯誤 (嘗試 ${retryCount}/${maxRetries}):`, modelError.message);
+            
+            if (quotaCheck.isQuotaError) {
+              console.error(`  ⚠️ 檢測到 API 額度/用量問題: ${quotaCheck.errorType}`);
+              console.error(`  💡 提示: ${quotaCheck.userMessage}`);
+              addTranscriptionLog(episodeId, 'error', `⚠️ ${quotaCheck.userMessage}`, '錯誤');
+              addTranscriptionLog(episodeId, 'info', `💡 請檢查 OpenAI 帳戶: https://platform.openai.com/usage`, '建議');
+              
+              // 如果是餘額或認證問題，不重試，直接拋出
+              if (!quotaCheck.shouldRetry) {
+                const enhancedError = new Error(quotaCheck.userMessage);
+                enhancedError.isQuotaError = true;
+                enhancedError.errorType = quotaCheck.errorType;
+                enhancedError.originalError = modelError;
+                throw enhancedError;
+              }
+            } else {
+              // 記錄其他錯誤詳情
+              if (modelError.response) {
+                const status = modelError.response.status;
+                const statusText = modelError.response.statusText;
+                const errorData = modelError.response.data || {};
+                console.error(`  API 響應錯誤: ${status} ${statusText}`, errorData);
+                addTranscriptionLog(episodeId, 'error', `API 錯誤: ${status} ${statusText} - ${errorData.error?.message || modelError.message}`, '轉錄');
+              } else if (modelError.cause?.errno) {
+                console.error(`  連接錯誤: ${modelError.cause.errno} (${modelError.cause.type})`);
+                addTranscriptionLog(episodeId, 'error', `連接錯誤: ${modelError.cause.errno} - ${modelError.message}`, '轉錄');
+              } else {
+                addTranscriptionLog(episodeId, 'error', `API 錯誤: ${modelError.message}`, '轉錄');
+              }
+            }
+            
+            if (retryCount >= maxRetries) {
+              console.error(`  ❌ 轉錄失敗，已重試 ${maxRetries} 次`);
+              addTranscriptionLog(episodeId, 'error', `轉錄失敗，已重試 ${maxRetries} 次: ${modelError.message}`, '錯誤');
+              
+              // 如果是最後一次重試且是連接錯誤，給出額度檢查建議
+              if (modelError.cause?.errno === 'ECONNRESET') {
+                addTranscriptionLog(episodeId, 'info', `💡 建議：請檢查 OpenAI 帳戶的 API 餘額和用量限制`, '建議');
+              }
+              
+              throw modelError;
+            } else {
+              // 對於連接錯誤，使用更長的重試延遲
+              const baseDelay = (modelError.cause?.errno === 'ECONNRESET' || quotaCheck.isQuotaError) ? 5000 : 2000;
+              const retryDelay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 30000);
+              console.warn(`  ⚠️ ${retryDelay / 1000} 秒後重試... (${retryCount}/${maxRetries})`);
+              addTranscriptionLog(episodeId, 'warn', `${retryDelay / 1000} 秒後重試... (${retryCount}/${maxRetries})`, '轉錄');
+              await new Promise(resolve => setTimeout(resolve, retryDelay));
+            }
+          }
         }
-        
-        const transcription = await openai.audio.transcriptions.create(transcriptionParams);
-        const segmentDuration = ((Date.now() - segmentStartTime) / 1000).toFixed(2);
-        console.log(`  ✅ 使用 whisper-1 模型轉錄成功，耗時: ${segmentDuration} 秒`);
-        addTranscriptionLog(episodeId, 'success', `使用 whisper-1 模型轉錄成功，耗時: ${segmentDuration} 秒`, '轉錄');
         
         finalTranscription = transcription;
         
@@ -1293,32 +1511,61 @@ app.post('/api/transcribe', (req, res) => {
             } catch (modelError) {
               retryCount++;
               
+              // 檢測 API 額度錯誤
+              const quotaCheck = detectQuotaError(modelError);
+              
               // 記錄詳細錯誤信息
               console.error(`    ❌ API 調用錯誤 (嘗試 ${retryCount}/${maxRetries}):`, modelError.message);
               
-              // 記錄 API 響應錯誤詳情
-              if (modelError.response) {
-                const status = modelError.response.status;
-                const statusText = modelError.response.statusText;
-                const errorData = modelError.response.data || {};
-                console.error(`    API 響應錯誤: ${status} ${statusText}`, errorData);
-                addTranscriptionLog(episodeId, 'error', `API 錯誤: ${status} ${statusText} - ${errorData.error?.message || modelError.message}`, '轉錄');
-              } else if (modelError.code) {
-                console.error(`    錯誤代碼: ${modelError.code}`);
-                addTranscriptionLog(episodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
+              if (quotaCheck.isQuotaError) {
+                console.error(`    ⚠️ 檢測到 API 額度/用量問題: ${quotaCheck.errorType}`);
+                console.error(`    💡 提示: ${quotaCheck.userMessage}`);
+                addTranscriptionLog(episodeId, 'error', `⚠️ ${quotaCheck.userMessage}`, '錯誤');
+                addTranscriptionLog(episodeId, 'info', `💡 請檢查 OpenAI 帳戶: https://platform.openai.com/usage`, '建議');
+                
+                // 如果是餘額或認證問題，不重試，直接拋出
+                if (!quotaCheck.shouldRetry) {
+                  const enhancedError = new Error(quotaCheck.userMessage);
+                  enhancedError.isQuotaError = true;
+                  enhancedError.errorType = quotaCheck.errorType;
+                  enhancedError.originalError = modelError;
+                  throw enhancedError;
+                }
               } else {
-                addTranscriptionLog(episodeId, 'error', `API 錯誤: ${modelError.message}`, '轉錄');
+                // 記錄其他錯誤詳情
+                if (modelError.response) {
+                  const status = modelError.response.status;
+                  const statusText = modelError.response.statusText;
+                  const errorData = modelError.response.data || {};
+                  console.error(`    API 響應錯誤: ${status} ${statusText}`, errorData);
+                  addTranscriptionLog(episodeId, 'error', `API 錯誤: ${status} ${statusText} - ${errorData.error?.message || modelError.message}`, '轉錄');
+                } else if (modelError.cause?.errno) {
+                  console.error(`    連接錯誤: ${modelError.cause.errno} (${modelError.cause.type})`);
+                  addTranscriptionLog(episodeId, 'error', `連接錯誤: ${modelError.cause.errno} - ${modelError.message}`, '轉錄');
+                } else if (modelError.code) {
+                  console.error(`    錯誤代碼: ${modelError.code}`);
+                  addTranscriptionLog(episodeId, 'error', `API 錯誤: ${modelError.code} - ${modelError.message}`, '轉錄');
+                } else {
+                  addTranscriptionLog(episodeId, 'error', `API 錯誤: ${modelError.message}`, '轉錄');
+                }
               }
               
               if (retryCount >= maxRetries) {
                 console.error(`    ❌ 轉錄失敗，已重試 ${maxRetries} 次`);
                 addTranscriptionLog(episodeId, 'error', `轉錄失敗，已重試 ${maxRetries} 次: ${modelError.message}`, '錯誤');
+                
+                // 如果是最後一次重試且是連接錯誤，給出額度檢查建議
+                if (modelError.cause?.errno === 'ECONNRESET') {
+                  addTranscriptionLog(episodeId, 'info', `💡 建議：請檢查 OpenAI 帳戶的 API 餘額和用量限制`, '建議');
+                }
+                
                 throw modelError;
               } else {
-                // 指數退避重試：500ms, 1000ms, 2000ms
-                const retryDelay = Math.min(500 * Math.pow(2, retryCount - 1), 2000);
-                console.warn(`    ⚠️ API 呼叫失敗，${retryDelay}ms 後重試... (${retryCount}/${maxRetries})`);
-                addTranscriptionLog(episodeId, 'warn', `API 呼叫失敗，${retryDelay}ms 後重試... (${retryCount}/${maxRetries})`, '轉錄');
+                // 對於連接錯誤或額度問題，使用更長的重試延遲
+                const baseDelay = (modelError.cause?.errno === 'ECONNRESET' || quotaCheck.isQuotaError) ? 5000 : 2000;
+                const retryDelay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 30000);
+                console.warn(`    ⚠️ ${retryDelay / 1000} 秒後重試... (${retryCount}/${maxRetries})`);
+                addTranscriptionLog(episodeId, 'warn', `${retryDelay / 1000} 秒後重試... (${retryCount}/${maxRetries})`, '轉錄');
                 await new Promise(resolve => setTimeout(resolve, retryDelay));
               }
             }
