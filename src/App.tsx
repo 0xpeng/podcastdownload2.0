@@ -510,6 +510,16 @@ interface GeneratedContent {
   socialPosts?: GeneratedSocialPosts;
 }
 
+// 新增：聊天消息接口
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+  episodeIds?: string[];
+  commandType?: 'stocks' | 'explain' | 'fact-check' | 'general';
+}
+
 const mockEpisodes: Episode[] = [
   {
     id: '1',
@@ -583,6 +593,12 @@ function App() {
   const [generatingAnalysis, setGeneratingAnalysis] = useState<Set<string>>(new Set());
   // 新增：大眾日報版本生成狀態
   const [generatingPublicReport, setGeneratingPublicReport] = useState<Set<string>>(new Set());
+  // 新增：聊天相關狀態
+  const [showChat, setShowChat] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [selectedEpisodesForChat, setSelectedEpisodesForChat] = useState<string[]>([]);
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
   
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -1242,6 +1258,101 @@ function App() {
         return next;
       });
     }
+  };
+
+  // 新增：處理聊天消息發送
+  const handleSendChatMessage = async () => {
+    if (!chatInput.trim() || isSendingMessage) return;
+    
+    if (selectedEpisodesForChat.length === 0) {
+      alert('請至少選擇一個集數進行聊天');
+      return;
+    }
+
+    // 檢查選中的集數是否都有逐字稿
+    const selectedEpisodes = episodes.filter(ep => selectedEpisodesForChat.includes(ep.id));
+    const missingTranscripts = selectedEpisodes.filter(ep => !ep.transcriptText || !ep.transcriptText.trim());
+    
+    if (missingTranscripts.length > 0) {
+      alert(`以下集數尚未完成逐字稿轉錄：${missingTranscripts.map(ep => ep.title).join(', ')}`);
+      return;
+    }
+
+    const userMessage: ChatMessage = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: chatInput,
+      timestamp: new Date(),
+      episodeIds: selectedEpisodesForChat,
+    };
+
+    setChatMessages(prev => [...prev, userMessage]);
+    setChatInput('');
+    setIsSendingMessage(true);
+
+    try {
+      const isMultiEpisode = selectedEpisodesForChat.length > 1;
+      
+      const requestBody = isMultiEpisode
+        ? {
+            episodeIds: selectedEpisodesForChat,
+            transcriptTexts: selectedEpisodes.map(ep => ep.transcriptText || ''),
+            titles: selectedEpisodes.map(ep => ep.title || ''),
+            message: userMessage.content,
+          }
+        : {
+            episodeId: selectedEpisodesForChat[0],
+            transcriptText: selectedEpisodes[0].transcriptText || '',
+            title: selectedEpisodes[0].title || '',
+            message: userMessage.content,
+          };
+
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      const aiMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: data.answer || '抱歉，無法生成回應。',
+        timestamp: new Date(),
+        episodeIds: selectedEpisodesForChat,
+        commandType: data.commandType,
+      };
+
+      setChatMessages(prev => [...prev, aiMessage]);
+    } catch (error) {
+      console.error('聊天錯誤:', error);
+      const errorMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: `錯誤：${error instanceof Error ? error.message : String(error)}`,
+        timestamp: new Date(),
+        episodeIds: selectedEpisodesForChat,
+      };
+      setChatMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsSendingMessage(false);
+    }
+  };
+
+  // 新增：切換集數選擇（用於聊天）
+  const toggleEpisodeForChat = (episodeId: string) => {
+    setSelectedEpisodesForChat(prev => {
+      if (prev.includes(episodeId)) {
+        return prev.filter(id => id !== episodeId);
+      } else {
+        return [...prev, episodeId];
+      }
+    });
   };
 
   // 下載音檔用於轉錄（保持原有邏輯）
@@ -2672,6 +2783,139 @@ function App() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {/* 新增：AI 聊天界面 */}
+        {episodes.length > 0 && (
+          <div className="chat-section">
+            <div className="chat-header">
+              <h2>💬 AI 聊天助手</h2>
+              <button
+                onClick={() => setShowChat(!showChat)}
+                className="toggle-chat-button"
+              >
+                {showChat ? '隱藏聊天' : '顯示聊天'}
+              </button>
+            </div>
+
+            {showChat && (
+              <div className="chat-container">
+                {/* 集數選擇區域 */}
+                <div className="chat-episode-selection">
+                  <h3>選擇要聊天的集數（可多選）：</h3>
+                  <div className="episode-checkboxes">
+                    {episodes
+                      .filter(ep => ep.transcriptText && ep.transcriptText.trim())
+                      .map(ep => (
+                        <label key={ep.id} className="episode-checkbox-label">
+                          <input
+                            type="checkbox"
+                            checked={selectedEpisodesForChat.includes(ep.id)}
+                            onChange={() => toggleEpisodeForChat(ep.id)}
+                          />
+                          <span>{ep.title}</span>
+                          {ep.transcriptText && (
+                            <span className="transcript-indicator">✓ 有逐字稿</span>
+                          )}
+                        </label>
+                      ))}
+                  </div>
+                  {episodes.filter(ep => ep.transcriptText && ep.transcriptText.trim()).length === 0 && (
+                    <p className="no-transcripts-hint">
+                      ⚠️ 請先為至少一個集數完成逐字稿轉錄
+                    </p>
+                  )}
+                </div>
+
+                {/* 特殊指令提示 */}
+                <div className="chat-commands-hint">
+                  <h4>💡 特殊指令：</h4>
+                  <div className="command-list">
+                    <div className="command-item">
+                      <code>/stocks</code> - 投資標的推薦
+                    </div>
+                    <div className="command-item">
+                      <code>/explain</code> - 專業術語解釋
+                    </div>
+                    <div className="command-item">
+                      <code>/fact-check</code> - 事實查證
+                    </div>
+                  </div>
+                </div>
+
+                {/* 聊天消息區域 */}
+                <div className="chat-messages">
+                  {chatMessages.length === 0 ? (
+                    <div className="chat-empty-state">
+                      <p>👋 開始與 AI 聊天吧！選擇集數後輸入問題。</p>
+                    </div>
+                  ) : (
+                    chatMessages.map(msg => (
+                      <div
+                        key={msg.id}
+                        className={`chat-message ${msg.role === 'user' ? 'user-message' : 'ai-message'}`}
+                      >
+                        <div className="message-header">
+                          <span className="message-role">
+                            {msg.role === 'user' ? '👤 你' : '🤖 AI'}
+                          </span>
+                          {msg.commandType && (
+                            <span className="command-badge">
+                              {msg.commandType === 'stocks' && '📈 投資分析'}
+                              {msg.commandType === 'explain' && '📚 術語解釋'}
+                              {msg.commandType === 'fact-check' && '✅ 事實查證'}
+                            </span>
+                          )}
+                          <span className="message-time">
+                            {msg.timestamp.toLocaleTimeString()}
+                          </span>
+                        </div>
+                        <div className="message-content">
+                          {msg.role === 'assistant' ? (
+                            <pre className="markdown-content">{msg.content}</pre>
+                          ) : (
+                            <p>{msg.content}</p>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                  {isSendingMessage && (
+                    <div className="chat-message ai-message">
+                      <div className="message-content">
+                        <p className="typing-indicator">AI 正在思考...</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 聊天輸入區域 */}
+                <div className="chat-input-area">
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendChatMessage();
+                      }
+                    }}
+                    placeholder="輸入問題或使用特殊指令（如 /stocks）..."
+                    className="chat-input"
+                    disabled={isSendingMessage || selectedEpisodesForChat.length === 0}
+                  />
+                  <button
+                    onClick={handleSendChatMessage}
+                    disabled={isSendingMessage || !chatInput.trim() || selectedEpisodesForChat.length === 0}
+                    className="chat-send-button"
+                  >
+                    {isSendingMessage ? '發送中...' : '發送'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>
