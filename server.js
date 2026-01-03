@@ -2250,6 +2250,288 @@ ${PROMPT_PUBLIC}
   }
 });
 
+// 新增：AI 聊天 API
+app.post('/api/chat', async (req, res) => {
+  console.log('AI 聊天 API 請求');
+
+  if (!process.env.OPENAI_API_KEY || !openai) {
+    return res.status(500).json({
+      error: 'OpenAI API 金鑰未設置，無法使用聊天功能'
+    });
+  }
+
+  const { episodeId, message, transcriptText, title, episodeIds, transcriptTexts, titles } = req.body || {};
+
+  if (!message || typeof message !== 'string' || message.trim().length === 0) {
+    return res.status(400).json({
+      error: '請提供有效的問題或指令'
+    });
+  }
+
+  try {
+    // 判斷是單集還是多集查詢
+    const isMultiEpisode = Array.isArray(episodeIds) && episodeIds.length > 0;
+    
+    let combinedTranscript = '';
+    let combinedTitles = [];
+    let totalLength = 0;
+    const MAX_TOKENS = 300000; // 最大 token 數（保守估算）
+    const SUMMARY_THRESHOLD = 250000; // 摘要閾值（估算 tokens）
+    let finalTranscript = '';
+    let usedSummary = false;
+
+    if (isMultiEpisode) {
+      // 多集查詢
+      console.log(`多集查詢模式，共 ${episodeIds.length} 集`);
+      
+      for (let i = 0; i < episodeIds.length; i++) {
+        const text = transcriptTexts[i] || '';
+        const epTitle = titles[i] || `集數 ${i + 1}`;
+        combinedTranscript += `\n\n=== ${epTitle} ===\n${text}`;
+        combinedTitles.push(epTitle);
+        totalLength += text.length;
+      }
+      
+      finalTranscript = combinedTranscript;
+    } else {
+      // 單集查詢
+      if (!transcriptText || typeof transcriptText !== 'string' || transcriptText.trim().length < 20) {
+        return res.status(400).json({
+          error: '缺少足夠的逐字稿內容，無法回答問題'
+        });
+      }
+      
+      finalTranscript = transcriptText;
+      totalLength = transcriptText.length;
+      combinedTitles = [title || 'Unknown'];
+    }
+
+    // 估算 token 數（保守估算：中文字符 * 2）
+    const estimatedTokens = totalLength * 2;
+    console.log(`逐字稿總長度: ${totalLength} 字元，估算 tokens: ${estimatedTokens}`);
+
+    // 如果超過摘要閾值，先進行智能摘要
+    if (estimatedTokens > SUMMARY_THRESHOLD) {
+      console.log(`⚠️ 逐字稿過長（估算 ${estimatedTokens} tokens），啟動智能摘要...`);
+      usedSummary = true;
+      
+      try {
+        const summaries = [];
+        
+        if (isMultiEpisode) {
+          // 多集：分別摘要每一集
+          for (let i = 0; i < transcriptTexts.length; i++) {
+            const text = transcriptTexts[i] || '';
+            const epTitle = titles[i] || `集數 ${i + 1}`;
+            
+            if (text.trim().length > 0) {
+              console.log(`  摘要集數 ${i + 1}: ${epTitle}`);
+              
+              const summaryPrompt = `請為以下 Podcast 逐字稿生成一個詳細的摘要，保留所有重要信息、關鍵觀點、數據和結論。摘要應該足夠詳細，以便後續可以基於摘要回答具體問題。
+
+逐字稿標題：${epTitle}
+
+逐字稿內容：
+${text.substring(0, 200000)}${text.length > 200000 ? '\n\n...（內容已截斷）' : ''}
+
+請生成詳細摘要：`;
+
+              const summaryCompletion = await openai.chat.completions.create({
+                model: 'gpt-5.2',
+                messages: [
+                  { role: 'user', content: summaryPrompt }
+                ],
+                temperature: 0.3,
+              });
+              
+              const summary = summaryCompletion.choices?.[0]?.message?.content || text.substring(0, 5000);
+              summaries.push(`=== ${epTitle} ===\n${summary}`);
+            }
+          }
+        } else {
+          // 單集：直接摘要
+          console.log(`  摘要單集: ${title || 'Unknown'}`);
+          
+          const summaryPrompt = `請為以下 Podcast 逐字稿生成一個詳細的摘要，保留所有重要信息、關鍵觀點、數據和結論。摘要應該足夠詳細，以便後續可以基於摘要回答具體問題。
+
+逐字稿標題：${title || 'Unknown'}
+
+逐字稿內容：
+${transcriptText.substring(0, 200000)}${transcriptText.length > 200000 ? '\n\n...（內容已截斷）' : ''}
+
+請生成詳細摘要：`;
+
+          const summaryCompletion = await openai.chat.completions.create({
+            model: 'gpt-5.2',
+            messages: [
+              { role: 'user', content: summaryPrompt }
+            ],
+            temperature: 0.3,
+          });
+          
+          const summary = summaryCompletion.choices?.[0]?.message?.content || transcriptText.substring(0, 5000);
+          summaries.push(summary);
+        }
+        
+        finalTranscript = summaries.join('\n\n');
+        console.log(`✅ 摘要完成，摘要後長度: ${finalTranscript.length} 字元`);
+      } catch (summaryError) {
+        console.warn('⚠️ 摘要失敗，使用截斷文本:', summaryError.message);
+        // 摘要失敗，使用截斷文本
+        finalTranscript = isMultiEpisode 
+          ? combinedTranscript.substring(0, 100000)
+          : transcriptText.substring(0, 100000);
+        usedSummary = false;
+      }
+    } else {
+      finalTranscript = isMultiEpisode ? combinedTranscript : transcriptText;
+    }
+
+    // 檢測特殊指令
+    const messageLower = message.trim().toLowerCase();
+    const isStocksCommand = messageLower.startsWith('/stocks') || 
+                           messageLower.includes('投資') || 
+                           messageLower.includes('股票') ||
+                           messageLower.includes('推薦');
+    const isExplainCommand = messageLower.startsWith('/explain') || 
+                            messageLower.includes('解釋') || 
+                            messageLower.includes('什麼意思') ||
+                            messageLower.includes('術語');
+    const isFactCheckCommand = messageLower.startsWith('/fact-check') || 
+                              messageLower.includes('事實') || 
+                              messageLower.includes('查證') ||
+                              messageLower.includes('真的嗎');
+
+    // 構建系統提示詞和用戶提示詞
+    let systemPrompt = '';
+    let userPrompt = '';
+    let commandType = 'general';
+
+    if (isStocksCommand) {
+      commandType = 'stocks';
+      systemPrompt = `你是一位專業的投資分析師，專門分析 Podcast 內容中的投資機會。
+你的任務是基於逐字稿內容，識別相關的美股投資標的，並提供投資建議。
+請專注於：
+1. 識別提到的公司、行業趨勢
+2. 分析投資機會和風險
+3. 提供具體的投資標的推薦（美股代碼）
+4. 說明推薦理由`;
+      
+      userPrompt = `以下是 Podcast 逐字稿內容：
+
+${finalTranscript}
+
+用戶問題：${message}
+
+請基於以上逐字稿內容，提供投資標的推薦和分析。`;
+    } else if (isExplainCommand) {
+      commandType = 'explain';
+      systemPrompt = `你是一位專業的技術翻譯和解釋專家。
+你的任務是將 Podcast 逐字稿中的專業術語和複雜概念，用簡單易懂的方式解釋給一般大眾。
+請使用：
+1. 簡單的語言和比喻
+2. 實際生活中的例子
+3. 避免過多專業術語`;
+      
+      userPrompt = `以下是 Podcast 逐字稿內容：
+
+${finalTranscript}
+
+用戶問題：${message}
+
+請基於以上逐字稿內容，解釋用戶詢問的專業術語或概念。`;
+    } else if (isFactCheckCommand) {
+      commandType = 'fact-check';
+      systemPrompt = `你是一位事實查證專家。
+你的任務是基於 Podcast 逐字稿的實際內容，驗證用戶提出的聲明或問題。
+請：
+1. 直接引用逐字稿中的相關段落
+2. 明確說明該聲明是否正確
+3. 提供具體的證據（逐字稿引用）`;
+      
+      userPrompt = `以下是 Podcast 逐字稿內容：
+
+${finalTranscript}
+
+用戶問題或聲明：${message}
+
+請基於以上逐字稿內容，驗證用戶的聲明或回答問題，並提供逐字稿中的具體引用。`;
+    } else {
+      commandType = 'general';
+      systemPrompt = `你是一位專業的 AI 助手，專門回答關於 Podcast 內容的問題。
+你的任務是基於提供的逐字稿內容，準確、詳細地回答用戶的問題。
+請：
+1. 只基於逐字稿的實際內容回答
+2. 如果逐字稿中沒有相關信息，明確說明
+3. 使用繁體中文回答
+4. 回答要清晰、有條理`;
+      
+      userPrompt = `以下是 Podcast 逐字稿內容：
+
+${finalTranscript}
+
+用戶問題：${message}
+
+請基於以上逐字稿內容回答用戶的問題。`;
+    }
+
+    // 調用 OpenAI API
+    let completion;
+    const modelsToTry = ['gpt-5.2', 'gpt-5-mini', 'gpt-4o', 'gpt-4-turbo'];
+    let lastError = null;
+
+    for (const model of modelsToTry) {
+      try {
+        console.log(`嘗試使用模型: ${model}`);
+        completion = await openai.chat.completions.create({
+          model: model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.5, // 平衡創造力和準確性
+        });
+        console.log(`✅ 使用 ${model} 模型生成回答成功`);
+        break;
+      } catch (modelError) {
+        console.warn(`⚠️ ${model} 不可用，嘗試下一個模型:`, modelError.message);
+        lastError = modelError;
+        continue;
+      }
+    }
+
+    if (!completion) {
+      throw lastError || new Error('所有模型都不可用');
+    }
+
+    const answer = completion.choices?.[0]?.message?.content || '抱歉，無法生成回應。';
+
+    if (!answer || answer.trim().length === 0) {
+      throw new Error('GPT 返回的回答為空');
+    }
+
+    console.log(`✅ AI 聊天回答生成成功，長度: ${answer.length} 字元`);
+
+    res.json({
+      success: true,
+      answer: answer,
+      commandType: commandType,
+      usedSummary: usedSummary,
+      metadata: {
+        transcriptLength: totalLength,
+        estimatedTokens: estimatedTokens,
+        model: completion.model,
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('AI 聊天失敗:', error);
+    res.status(500).json({
+      error: `AI 聊天失敗: ${error.message || String(error)}`
+    });
+  }
+});
+
 // 新增：錯字檢查與修正函數
 async function checkAndCorrectSpelling(transcription, language = 'zh', contentType = 'podcast') {
   if (!transcription || !transcription.text) {
